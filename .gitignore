@@ -1,0 +1,35 @@
+# ─── Environment & Secrets ───────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+secrets/
+credentials/
+
+# ─── PostgreSQL ───────────────────────────────────────────────
+*.dump
+*.pgdump
+*.sql.gz
+*.backup
+pg_data/
+
+# ─── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ─── Editors ──────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Python ──────────────────────────────────────────────────
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# ─── Node ────────────────────────────────────────────────────
+node_modules/
+package-lock.json
