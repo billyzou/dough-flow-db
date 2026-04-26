@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS categories (
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS plaid_category_map (
+    plaid_category VARCHAR(150) PRIMARY KEY,
+    category_id    INT NOT NULL REFERENCES categories(category_id) ON DELETE RESTRICT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
     transaction_id        SERIAL PRIMARY KEY,
     account_id            INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
@@ -85,12 +91,24 @@ CREATE INDEX IF NOT EXISTS idx_budgets_category_id      ON budgets(category_id);
 
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
-BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+BEGIN 
+    NEW.updated_at = NOW(); 
+    RETURN NEW; 
+    END;
 $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER trg_accounts_updated_at
-    BEFORE UPDATE ON accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+    BEFORE UPDATE ON accounts 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at();
+
 CREATE OR REPLACE TRIGGER trg_transactions_updated_at
-    BEFORE UPDATE ON transactions FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+    BEFORE UPDATE ON transactions 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at();
+
 CREATE OR REPLACE TRIGGER trg_budgets_updated_at
-    BEFORE UPDATE ON budgets FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+    BEFORE UPDATE ON budgets 
+    FOR EACH ROW 
+    EXECUTE FUNCTION update_updated_at();
+

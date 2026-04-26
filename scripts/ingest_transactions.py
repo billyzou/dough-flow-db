@@ -127,7 +127,16 @@ def upsert_accounts(conn, accounts):
     return account_id_map
 
 
-def upsert_transactions(conn, transactions, account_id_map):
+def load_category_map(conn):
+    """Load plaid_category -> category_id lookup once, up front."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT plaid_category, category_id FROM plaid_category_map")
+        cat_map = dict(cur.fetchall())
+    log.info(f"Loaded {len(cat_map)} category mappings")
+    return cat_map
+
+
+def upsert_transactions(conn, transactions, account_id_map, category_map):
     """
     Insert posted transactions; skip on conflict (idempotent re-runs).
     Amount sign is flipped from Plaid's convention:
@@ -136,17 +145,17 @@ def upsert_transactions(conn, transactions, account_id_map):
     """
     sql = """
         INSERT INTO transactions (
-            account_id, plaid_transaction_id, plaid_category,
+            account_id, category_id, plaid_transaction_id, plaid_category,
             amount, description, merchant, status,
             transaction_date, posted_date
         ) VALUES (
-            %(account_id)s, %(plaid_transaction_id)s, %(plaid_category)s,
+            %(account_id)s, %(category_id)s, %(plaid_transaction_id)s, %(plaid_category)s,
             %(amount)s, %(description)s, %(merchant)s, %(status)s,
             %(transaction_date)s, %(posted_date)s
         )
         ON CONFLICT (plaid_transaction_id) DO NOTHING
     """
-    inserted = skipped_pending = skipped_no_account = 0
+    inserted = skipped_pending = skipped_no_account = unmapped_categories = 0
 
     with conn.cursor() as cur:
         for txn in transactions:
@@ -163,10 +172,17 @@ def upsert_transactions(conn, transactions, account_id_map):
                 continue
 
             pfc = t.get('personal_finance_category') or {}
+            plaid_cat = pfc.get('primary')
+            category_id = category_map.get(plaid_cat)
+            if plaid_cat and category_id is None:
+                log.warning(f"  Unmapped plaid_category={plaid_cat} (txn {t['transaction_id']})")
+                unmapped_categories += 1
+
             cur.execute(sql, {
                 'account_id':           local_account_id,
+                'category_id':          category_id,
                 'plaid_transaction_id': t['transaction_id'],
-                'plaid_category':       pfc.get('primary'),
+                'plaid_category':       plaid_cat,
                 'amount':               -t['amount'],
                 'description':          t.get('name'),
                 'merchant':             t.get('merchant_name'),
@@ -177,7 +193,7 @@ def upsert_transactions(conn, transactions, account_id_map):
             inserted += cur.rowcount
 
     conn.commit()
-    log.info(f"  Transactions inserted: {inserted} | skipped pending: {skipped_pending} | skipped no account: {skipped_no_account}")
+    log.info(f"  Transactions inserted: {inserted} | skipped pending: {skipped_pending} | skipped no account: {skipped_no_account} | unmapped categories: {unmapped_categories}")
 
 
 def main():
@@ -189,7 +205,7 @@ def main():
             "then add: PLAID_ACCESS_TOKEN=access-sandbox-... to your .env file."
         )
 
-    start_date = date.today() - timedelta(days=30)
+    start_date = date.today() - timedelta(days=730)
     end_date   = date.today()
 
     log.info("=== Starting Plaid ingestion ===")
@@ -199,7 +215,8 @@ def main():
     try:
         accounts, transactions = fetch_plaid_data(client, access_token, start_date, end_date)
         account_id_map = upsert_accounts(conn, accounts)
-        upsert_transactions(conn, transactions, account_id_map)
+        category_map   = load_category_map(conn)
+        upsert_transactions(conn, transactions, account_id_map, category_map)
     finally:
         conn.close()
 
