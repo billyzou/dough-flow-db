@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-ingest_transactions.py
+ingest_plaid.py
+
+LEGACY — superseded by ingest_teller.py.
+Kept as historical reference for how the Plaid integration worked.
+Will not run as-is: PLAID_* env vars and plaid_* schema columns have been removed.
 
 Pulls accounts and transactions from Plaid and upserts them into dough_flow_db.
 Safe to re-run — accounts update their balance, transactions skip on conflict.
-
-Requires in .env:
-  PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV, PLAID_ACCESS_TOKEN
-  DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-
-To get a sandbox PLAID_ACCESS_TOKEN: run explore_plaid.ipynb and copy the
-access_token printed in Step 3, then add it to .env.
 """
 
 import logging

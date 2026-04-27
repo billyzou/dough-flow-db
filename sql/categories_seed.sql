@@ -1,38 +1,45 @@
 -- ============================================================
--- Category Taxonomy + Plaid Mapping
+-- Category Taxonomy + Teller Mapping
 -- Idempotent — safe to re-run.
 -- Run AFTER schema.sql.
 -- ============================================================
 
--- Our category taxonomy (flat, 1:1 with Plaid PFC for now).
 INSERT INTO categories (name, type) VALUES
-    ('Food',          'expense'),
-    ('Entertainment', 'expense'),
-    ('Transport',     'expense'),
-    ('Travel',        'expense'),
-    ('Housing',       'expense'),
-    ('Shopping',      'expense'),
-    ('Personal Care', 'expense'),
-    ('Loan Payments', 'expense'),
-    ('Transfers',     'expense'),
-    ('Income',        'income')
+    ('Groceries',         'expense'),
+    ('Food',              'expense'),
+    ('Shopping',          'expense'),
+    ('Bills & Utilities', 'expense'),
+    ('Transport',         'expense'),
+    ('Travel',            'expense'),
+    ('Entertainment',     'expense'),
+    ('Housing',           'expense'),
+    ('Personal Care',     'expense'),
+    ('Loan Payments',     'expense'),
+    ('Transfers',         'expense'),
+    ('Income',            'income')
 ON CONFLICT (name) DO NOTHING;
 
--- Map Plaid's personal_finance_category.primary -> our category_id.
-INSERT INTO plaid_category_map (plaid_category, category_id)
-SELECT v.plaid_category, c.category_id
+-- Map Teller's details.category -> our category_id.
+-- "service" is intentionally unmapped (too vague) — those rows stay NULL
+-- until we see real merchant data and can categorize them properly.
+INSERT INTO category_map (external_category, category_id)
+SELECT v.external_category, c.category_id
 FROM (VALUES
-    ('FOOD_AND_DRINK',      'Food'),
-    ('ENTERTAINMENT',       'Entertainment'),
-    ('TRANSPORTATION',      'Transportation'),
-    ('TRAVEL',              'Travel'),
-    ('RENT_AND_UTILITIES',  'Housing'),
-    ('GENERAL_MERCHANDISE', 'Shopping'),
-    ('PERSONAL_CARE',       'Personal Care'),
-    ('LOAN_PAYMENTS',       'Loan Payments'),
-    ('TRANSFER_OUT',        'Transfers'),
-    ('TRANSFER_IN',         'Transfers'),
-    ('INCOME',              'Income')
-) AS v(plaid_category, category_name)
+    ('groceries',      'Groceries'),
+    ('dining',         'Food'),
+    ('shopping',       'Shopping'),
+    ('general',        'Shopping'),
+    ('electronics',    'Shopping'),
+    ('office',         'Shopping'),
+    ('phone',          'Bills & Utilities'),
+    ('utilities',      'Bills & Utilities'),
+    ('software',       'Bills & Utilities'),
+    ('transportation', 'Transport'),
+    ('fuel',           'Transport'),
+    ('accommodation',  'Travel'),
+    ('entertainment',  'Entertainment'),
+    ('home',           'Housing'),
+    ('health',         'Personal Care')
+) AS v(external_category, category_name)
 JOIN categories c ON c.name = v.category_name
-ON CONFLICT (plaid_category) DO NOTHING;
+ON CONFLICT (external_category) DO NOTHING;

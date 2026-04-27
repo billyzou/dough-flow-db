@@ -4,6 +4,7 @@
 *.env
 !.env.example
 secrets/
+.secrets/
 credentials/
 
 # ─── PostgreSQL ───────────────────────────────────────────────
@@ -29,6 +30,7 @@ __pycache__/
 *.pyc
 venv/
 .venv/
+.ipynb_checkpoints/
 
 # ─── Node ────────────────────────────────────────────────────
 node_modules/
