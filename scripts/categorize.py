@@ -3,9 +3,9 @@
 categorize.py
 
 Assigns category_id to any transactions that don't have one yet,
-using the plaid_category_map lookup table.
+using the category_map lookup table.
 
-Run after ingest_transactions.py.
+Run after ingest_teller.py.
 Safe to re-run — only touches rows where category_id IS NULL.
 """
 
@@ -33,21 +33,21 @@ def build_db_conn():
 
 def categorize(conn):
     """
-    Update transactions.category_id by joining on plaid_category_map.
+    Update transactions.category_id by joining on category_map.
     Only touches rows where category_id IS NULL.
     """
     update_sql = """
         UPDATE transactions t
         SET category_id = m.category_id
-        FROM plaid_category_map m
-        WHERE t.plaid_category = m.plaid_category
+        FROM category_map m
+        WHERE t.external_category = m.external_category
           AND t.category_id IS NULL
     """
     unmapped_sql = """
-        SELECT plaid_category, COUNT(*) AS n
+        SELECT external_category, COUNT(*) AS n
         FROM transactions
         WHERE category_id IS NULL
-        GROUP BY plaid_category
+        GROUP BY external_category
         ORDER BY n DESC
     """
 
@@ -60,8 +60,8 @@ def categorize(conn):
         unmapped = cur.fetchall()
         if unmapped:
             log.warning(f"{sum(n for _, n in unmapped)} transactions remain uncategorized:")
-            for plaid_cat, n in unmapped:
-                log.warning(f"  {plaid_cat or '(NULL)'}: {n}")
+            for ext_cat, n in unmapped:
+                log.warning(f"  {ext_cat or '(NULL)'}: {n}")
         else:
             log.info("All transactions are categorized")
 

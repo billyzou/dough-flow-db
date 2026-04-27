@@ -5,7 +5,7 @@
 
 CREATE TABLE IF NOT EXISTS accounts (
     account_id       SERIAL PRIMARY KEY,
-    plaid_account_id VARCHAR(100) UNIQUE,
+    external_account_id VARCHAR(100) UNIQUE,
     name             VARCHAR(100) NOT NULL,
     type             VARCHAR(50)  NOT NULL CHECK (type IN ('checking', 'savings', 'credit', 'investment', 'cash')),
     institution      VARCHAR(100),
@@ -25,28 +25,29 @@ CREATE TABLE IF NOT EXISTS categories (
     created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS plaid_category_map (
-    plaid_category VARCHAR(150) PRIMARY KEY,
-    category_id    INT NOT NULL REFERENCES categories(category_id) ON DELETE RESTRICT,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+CREATE TABLE IF NOT EXISTS category_map (
+    external_category VARCHAR(150) PRIMARY KEY,
+    category_id       INT NOT NULL REFERENCES categories(category_id) ON DELETE RESTRICT,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
-    transaction_id        SERIAL PRIMARY KEY,
-    account_id            INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    category_id           INT          REFERENCES categories(category_id) ON DELETE SET NULL,
-    plaid_transaction_id  VARCHAR(100) UNIQUE,
-    plaid_category        VARCHAR(150),
-    amount                NUMERIC(15, 2) NOT NULL,
-    description           TEXT,
-    merchant              VARCHAR(150),
-    status                VARCHAR(10)  NOT NULL DEFAULT 'posted' CHECK (status IN ('posted', 'pending')),
-    transaction_date      DATE         NOT NULL,
-    posted_date           DATE,
-    is_recurring          BOOLEAN      NOT NULL DEFAULT FALSE,
-    notes                 TEXT,
-    created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    transaction_id           SERIAL PRIMARY KEY,
+    account_id               INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    category_id              INT          REFERENCES categories(category_id) ON DELETE SET NULL,
+    external_transaction_id  VARCHAR(100) UNIQUE,
+    external_category        VARCHAR(150),
+    transaction_type         VARCHAR(30),
+    amount                   NUMERIC(15, 2) NOT NULL,
+    description              TEXT,
+    merchant                 VARCHAR(150),
+    status                   VARCHAR(10)  NOT NULL DEFAULT 'posted' CHECK (status IN ('posted', 'pending')),
+    transaction_date         DATE         NOT NULL,
+    posted_date              DATE,
+    is_recurring             BOOLEAN      NOT NULL DEFAULT FALSE,
+    notes                    TEXT,
+    created_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS transfers (
