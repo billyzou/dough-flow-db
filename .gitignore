@@ -35,3 +35,10 @@ venv/
 # ─── Node ────────────────────────────────────────────────────
 node_modules/
 package-lock.json
+
+# ─── Local notes ─────────────────────────────────────────────
+schema_notes.md
+scripts/explore_plaid_response.py
+
+# ─── Claude Code local config ────────────────────────────────
+.claude/

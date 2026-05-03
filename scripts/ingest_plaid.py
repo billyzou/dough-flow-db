@@ -2,12 +2,12 @@
 """
 ingest_plaid.py
 
-LEGACY — superseded by ingest_teller.py.
-Kept as historical reference for how the Plaid integration worked.
-Will not run as-is: PLAID_* env vars and plaid_* schema columns have been removed.
+Pulls accounts and transactions from Plaid and upserts them into Postgres.
+Categorization is a separate step — run scripts/categorize.py after this.
 
-Pulls accounts and transactions from Plaid and upserts them into dough_flow_db.
-Safe to re-run — accounts update their balance, transactions skip on conflict.
+Sign convention (matches CLAUDE.md): negative = expense, positive = income.
+Plaid normalizes amount sign across account types (positive = money out from
+the user's perspective), so we flip once on insert regardless of account type.
 """
 
 import logging
@@ -19,6 +19,10 @@ from dotenv import load_dotenv
 
 import plaid
 from plaid.api import plaid_api
+from plaid.model.country_code import CountryCode
+from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
+from plaid.model.item_get_request import ItemGetRequest
+from plaid.model.products import Products
 from plaid.model.transactions_get_request import TransactionsGetRequest
 from plaid.model.transactions_get_request_options import TransactionsGetRequestOptions
 
@@ -27,21 +31,21 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
 
+TOKEN_PREFIX = 'PLAID_TOKEN_'
+
 PLAID_ENV_MAP = {
     'sandbox':    plaid.Environment.Sandbox,
     'production': plaid.Environment.Production,
 }
 
 
-def map_account_type(plaid_type, plaid_subtype):
-    """Map Plaid account type/subtype to our schema's type enum."""
-    if plaid_type == 'depository':
-        return 'checking' if plaid_subtype == 'checking' else 'savings'
-    if plaid_type == 'credit':
-        return 'credit'
-    if plaid_type == 'investment':
-        return 'investment'
-    return 'cash'
+def discover_tokens():
+    """Return {label: token} for every env var matching PLAID_TOKEN_<LABEL>."""
+    return {
+        k[len(TOKEN_PREFIX):]: v
+        for k, v in os.environ.items()
+        if k.startswith(TOKEN_PREFIX) and v
+    }
 
 
 def build_plaid_client():
@@ -66,14 +70,38 @@ def build_db_conn():
     )
 
 
-def fetch_plaid_data(client, access_token, start_date, end_date):
+def map_account_type(plaid_type, plaid_subtype):
+    if plaid_type == 'depository':
+        return 'checking' if plaid_subtype == 'checking' else 'savings'
+    if plaid_type == 'credit':
+        return 'credit'
+    if plaid_type == 'investment':
+        return 'investment'
+    return 'cash'
+
+
+def fetch_institution_name(client, access_token):
+    item = client.item_get(ItemGetRequest(access_token=access_token))['item']
+    inst_id = item['institution_id']
+    if not inst_id:
+        return None
+    inst = client.institutions_get_by_id(
+        InstitutionsGetByIdRequest(
+            institution_id=inst_id,
+            country_codes=[CountryCode('US')],
+        )
+    )['institution']
+    return inst['name']
+
+
+def fetch_transactions(client, access_token, start_date, end_date):
     """Fetch all accounts and transactions, paginating until complete."""
-    log.info(f"Fetching transactions from {start_date} to {end_date}")
-    all_transactions = []
+    all_txns = []
     offset = 0
+    accounts = None
 
     while True:
-        response = client.transactions_get(
+        resp = client.transactions_get(
             TransactionsGetRequest(
                 access_token=access_token,
                 start_date=start_date,
@@ -81,130 +109,150 @@ def fetch_plaid_data(client, access_token, start_date, end_date):
                 options=TransactionsGetRequestOptions(count=500, offset=offset),
             )
         )
-        all_transactions.extend(response['transactions'])
-        total = response['total_transactions']
-        log.info(f"  Fetched {len(all_transactions)}/{total} transactions")
-        if len(all_transactions) >= total:
+        if accounts is None:
+            accounts = resp['accounts']
+        all_txns.extend(resp['transactions'])
+        total = resp['total_transactions']
+        log.info(f"  Fetched {len(all_txns)}/{total} transactions")
+        if len(all_txns) >= total:
             break
-        offset += len(response['transactions'])
+        offset += len(resp['transactions'])
 
-    return response['accounts'], all_transactions
+    return accounts, all_txns
 
 
-def upsert_accounts(conn, accounts):
-    """
-    Upsert accounts; update balance on conflict.
-    Returns a dict mapping plaid_account_id -> local account_id.
-    """
-    log.info(f"Upserting {len(accounts)} accounts...")
+def upsert_accounts(conn, accounts, institution_name):
+    """Upsert accounts; return {external_account_id: (account_id, type)} for the transaction step."""
     sql = """
-        INSERT INTO accounts (plaid_account_id, name, type, currency, balance)
-        VALUES (%(plaid_account_id)s, %(name)s, %(type)s, %(currency)s, %(balance)s)
-        ON CONFLICT (plaid_account_id) DO UPDATE SET
-            balance    = EXCLUDED.balance,
-            updated_at = NOW()
-        RETURNING plaid_account_id, account_id
+        INSERT INTO accounts (external_account_id, name, type, institution, currency, balance)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (external_account_id) DO UPDATE SET
+            name        = EXCLUDED.name,
+            type        = EXCLUDED.type,
+            institution = EXCLUDED.institution,
+            currency    = EXCLUDED.currency,
+            balance     = EXCLUDED.balance
+        RETURNING account_id, external_account_id, type
     """
-    account_id_map = {}
+    lookup = {}
     with conn.cursor() as cur:
         for acct in accounts:
             a = acct.to_dict()
             balances = a.get('balances') or {}
-            cur.execute(sql, {
-                'plaid_account_id': a['account_id'],
-                'name':             a['name'],
-                'type':             map_account_type(str(a.get('type', '')), str(a.get('subtype', '') or '')),
-                'currency':         balances.get('iso_currency_code') or 'USD',
-                'balance':          balances.get('current') or 0,
-            })
-            plaid_id, local_id = cur.fetchone()
-            account_id_map[plaid_id] = local_id
+            cur.execute(sql, (
+                a['account_id'],
+                a['name'],
+                map_account_type(str(a.get('type', '')), str(a.get('subtype', '') or '')),
+                institution_name,
+                balances.get('iso_currency_code') or 'USD',
+                balances.get('current') or 0,
+            ))
+            account_id, ext_id, typ = cur.fetchone()
+            lookup[ext_id] = (account_id, typ)
+            log.info(f"  Upserted account {a['name']} (local id={account_id}, type={typ})")
+
     conn.commit()
-    log.info(f"  Accounts done: {len(account_id_map)}")
-    return account_id_map
+    log.info(f"  Accounts upserted: {len(lookup)}")
+    return lookup
 
 
-def upsert_transactions(conn, transactions, account_id_map):
-    """
-    Insert posted transactions; skip on conflict (idempotent re-runs).
-    Amount sign is flipped from Plaid's convention:
-      Plaid positive = money out = we store as negative (expense).
-      Plaid negative = money in  = we store as positive (income).
-
-    Inserts raw rows with category_id NULL. Run categorize.py afterward
-    to assign categories from plaid_category_map.
-    """
+def upsert_transactions(conn, transactions, account_lookup):
+    """Insert posted transactions; skip pending; flip Plaid's sign convention."""
     sql = """
         INSERT INTO transactions (
-            account_id, plaid_transaction_id, plaid_category,
-            amount, description, merchant, status,
-            transaction_date, posted_date
-        ) VALUES (
-            %(account_id)s, %(plaid_transaction_id)s, %(plaid_category)s,
-            %(amount)s, %(description)s, %(merchant)s, %(status)s,
-            %(transaction_date)s, %(posted_date)s
+            external_transaction_id, account_id, external_category, transaction_type,
+            amount, description, merchant, status, transaction_date, posted_date
         )
-        ON CONFLICT (plaid_transaction_id) DO NOTHING
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (external_transaction_id) DO NOTHING
     """
-    inserted = skipped_pending = skipped_no_account = 0
+    seen = inserted = skipped_pending = skipped_no_account = 0
 
     with conn.cursor() as cur:
         for txn in transactions:
             t = txn.to_dict()
+            seen += 1
 
             if t.get('pending'):
                 skipped_pending += 1
                 continue
 
-            local_account_id = account_id_map.get(t['account_id'])
-            if local_account_id is None:
-                log.warning(f"  No local account for plaid_account_id={t['account_id']}, skipping {t['transaction_id']}")
+            entry = account_lookup.get(t['account_id'])
+            if entry is None:
                 skipped_no_account += 1
+                log.warning(f"  No local account for {t['account_id']}, skipping {t['transaction_id']}")
                 continue
+            local_account_id, _ = entry
 
             pfc = t.get('personal_finance_category') or {}
-            cur.execute(sql, {
-                'account_id':           local_account_id,
-                'plaid_transaction_id': t['transaction_id'],
-                'plaid_category':       pfc.get('primary'),
-                'amount':               -t['amount'],
-                'description':          t.get('name'),
-                'merchant':             t.get('merchant_name'),
-                'status':               'posted',
-                'transaction_date':     t.get('authorized_date') or t['date'],
-                'posted_date':          t['date'],
-            })
+            cur.execute(sql, (
+                t['transaction_id'],
+                local_account_id,
+                pfc.get('primary'),
+                t.get('transaction_type'),
+                -t['amount'],
+                t.get('name'),
+                t.get('merchant_name'),
+                'posted',
+                t.get('authorized_date') or t['date'],
+                t['date'],
+            ))
             inserted += cur.rowcount
 
     conn.commit()
-    log.info(f"  Transactions inserted: {inserted} | skipped pending: {skipped_pending} | skipped no account: {skipped_no_account}")
+    log.info(f"  Transactions seen: {seen}, inserted: {inserted}, skipped pending: {skipped_pending}, skipped no account: {skipped_no_account}")
+    return seen, inserted, skipped_pending
+
+
+def ingest_enrollment(conn, client, label, token, start_date, end_date):
+    log.info(f"--- Ingesting enrollment: {label} ---")
+    institution_name = fetch_institution_name(client, token)
+    log.info(f"[{label}] Institution: {institution_name}")
+    accounts, transactions = fetch_transactions(client, token, start_date, end_date)
+    log.info(f"[{label}] Fetched {len(accounts)} accounts, {len(transactions)} transactions")
+    account_lookup = upsert_accounts(conn, accounts, institution_name)
+    return upsert_transactions(conn, transactions, account_lookup)
 
 
 def main():
-    access_token = os.environ.get('PLAID_ACCESS_TOKEN')
-    if not access_token:
-        raise SystemExit(
-            "PLAID_ACCESS_TOKEN not set in .env.\n"
-            "Run explore_plaid.ipynb and copy the access_token from Step 3 output,\n"
-            "then add: PLAID_ACCESS_TOKEN=access-sandbox-... to your .env file."
-        )
+    log.info("=== Starting Plaid ingest ===")
+
+    tokens = discover_tokens()
+    if not tokens:
+        log.error(f"No tokens found. Set one or more {TOKEN_PREFIX}<LABEL> env vars in .env.")
+        return 1
+
+    log.info(f"Found {len(tokens)} enrollment(s): {sorted(tokens)}")
 
     start_date = date.today() - timedelta(days=730)
     end_date   = date.today()
 
-    log.info("=== Starting Plaid ingestion ===")
     client = build_plaid_client()
-    conn   = build_db_conn()
-
+    conn = build_db_conn()
+    failures = []
+    grand_seen = grand_inserted = grand_skipped = 0
     try:
-        accounts, transactions = fetch_plaid_data(client, access_token, start_date, end_date)
-        account_id_map = upsert_accounts(conn, accounts)
-        upsert_transactions(conn, transactions, account_id_map)
+        for label, token in tokens.items():
+            try:
+                seen, inserted, skipped = ingest_enrollment(
+                    conn, client, label, token, start_date, end_date
+                )
+                grand_seen += seen
+                grand_inserted += inserted
+                grand_skipped += skipped
+            except Exception as e:
+                log.exception(f"[{label}] Ingest failed: {e}")
+                failures.append(label)
+                conn.rollback()
     finally:
         conn.close()
 
-    log.info("=== Ingestion complete ===")
+    log.info(
+        f"=== Plaid ingest complete: seen={grand_seen}, inserted={grand_inserted}, "
+        f"skipped_pending={grand_skipped}, failed_enrollments={failures or 'none'} ==="
+    )
+    return 1 if failures else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
