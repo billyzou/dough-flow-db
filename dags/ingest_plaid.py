@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).parent.parent
 
 with DAG(
     dag_id = 'daily_ingest_plaid',
-    schedule = '0 0 * * *',
+    schedule = '0 10 * * *',
     start_date = datetime(2026, 5, 3),
     catchup = False
 ) as dag: 
