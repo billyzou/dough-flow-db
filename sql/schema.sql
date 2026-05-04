@@ -113,3 +113,14 @@ CREATE OR REPLACE TRIGGER trg_budgets_updated_at
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at();
 
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    run_id        SERIAL PRIMARY KEY,
+    enrollment    VARCHAR(150),
+    started_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    finished_at   TIMESTAMPTZ,
+    success       BOOLEAN      NOT NULL,
+    error_message TEXT, 
+    rows_seen     INT,  
+    rows_inserted INT,
+    rows_skipped  INT
+);

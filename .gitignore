@@ -36,6 +36,9 @@ venv/
 node_modules/
 package-lock.json
 
+# ─── Airflow ─────────────────────────────────────────────────
+airflow/
+
 # ─── Local notes ─────────────────────────────────────────────
 schema_notes.md
 scripts/explore_plaid_response.py
