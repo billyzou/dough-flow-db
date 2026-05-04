@@ -12,7 +12,7 @@ the user's perspective), so we flip once on insert regardless of account type.
 
 import logging
 import os
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 import psycopg2
 from dotenv import load_dotenv
@@ -214,6 +214,30 @@ def ingest_enrollment(conn, client, label, token, start_date, end_date):
     return upsert_transactions(conn, transactions, account_lookup)
 
 
+def insert_pipeline_runs(conn, enrollment, started_at, finished_at, success, error_message, rows_seen, rows_inserted, rows_skipped):
+    """Insert pipeline runs"""
+    sql = """
+        INSERT INTO pipeline_runs (
+            enrollment, started_at, finished_at, success, error_message, rows_seen, rows_inserted, rows_skipped
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(sql, (
+            enrollment, 
+            started_at, 
+            finished_at, 
+            success, 
+            error_message, 
+            rows_seen, 
+            rows_inserted, 
+            rows_skipped
+        ))
+    
+    conn.commit()
+
+
 def main():
     log.info("=== Starting Plaid ingest ===")
 
@@ -233,17 +257,26 @@ def main():
     grand_seen = grand_inserted = grand_skipped = 0
     try:
         for label, token in tokens.items():
+            started_at = None
             try:
+                started_at = datetime.now()
                 seen, inserted, skipped = ingest_enrollment(
                     conn, client, label, token, start_date, end_date
                 )
+                finished_at = datetime.now()
+                insert_pipeline_runs(conn=conn, enrollment=label, started_at=started_at, finished_at=finished_at, success=True, error_message=None, rows_seen=seen, rows_inserted=inserted, rows_skipped=skipped)
                 grand_seen += seen
                 grand_inserted += inserted
                 grand_skipped += skipped
+
             except Exception as e:
-                log.exception(f"[{label}] Ingest failed: {e}")
+                finished_at = datetime.now()
+                error_message = f"[{label}] Ingest failed: {e}"
+                log.exception(error_message)
                 failures.append(label)
                 conn.rollback()
+                insert_pipeline_runs(conn=conn, enrollment=label, started_at=started_at, finished_at=finished_at, success=False, error_message=error_message, rows_seen=None, rows_inserted=None, rows_skipped=None)
+
     finally:
         conn.close()
 
