@@ -39,6 +39,12 @@ package-lock.json
 # ─── Airflow ─────────────────────────────────────────────────
 airflow/
 
+# ─── CSV imports ─────────────────────────────────────────────
+data/
+
+# ─── Local analyses ───────────────────────────────────────────
+analyses/
+
 # ─── Local notes ─────────────────────────────────────────────
 schema_notes.md
 scripts/explore_plaid_response.py
