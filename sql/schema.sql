@@ -113,6 +113,15 @@ CREATE OR REPLACE TRIGGER trg_budgets_updated_at
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at();
 
+CREATE TABLE IF NOT EXISTS account_balances (
+    balance_id    SERIAL PRIMARY KEY,
+    account_id    INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
+    snapshot_date DATE         NOT NULL,
+    currency      CHAR(3)      NOT NULL DEFAULT 'USD',
+    balance       NUMERIC(15, 2) NOT NULL,
+    UNIQUE (account_id, snapshot_date)
+);
+
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     run_id        SERIAL PRIMARY KEY,
     enrollment    VARCHAR(150),

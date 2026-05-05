@@ -151,6 +151,17 @@ def upsert_accounts(conn, accounts, institution_name):
             lookup[ext_id] = (account_id, typ)
             log.info(f"  Upserted account {a['name']} (local id={account_id}, type={typ})")
 
+            cur.execute("""
+                INSERT INTO account_balances (account_id, snapshot_date, currency, balance)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (account_id, snapshot_date) DO UPDATE SET balance = EXCLUDED.balance
+            """, (
+                account_id,
+                date.today(),
+                balances.get('iso_currency_code') or 'USD',
+                balances.get('current') or 0,
+            ))
+
     conn.commit()
     log.info(f"  Accounts upserted: {len(lookup)}")
     return lookup
