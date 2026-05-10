@@ -13,6 +13,6 @@ with DAG(
 ) as dag: 
     BashOperator(
         task_id = 'run_ingest', 
-        bash_command = f'{REPO_ROOT}/.venv/bin/python3 {REPO_ROOT}/scripts/ingest_plaid.py'
+        bash_command = f'python3 {REPO_ROOT}/scripts/ingest_plaid.py'
     )
 
