@@ -1,0 +1,12 @@
+dough_flow_db:
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DB_HOST', 'localhost') }}"
+      port: "{{ env_var('DB_PORT', '5433') | int }}"
+      dbname: "{{ env_var('DB_NAME', 'dough_flow_db') }}"
+      user: "{{ env_var('DB_USER', 'bzou') }}"
+      pass: "{{ env_var('DB_PASSWORD') }}"
+      schema: public
+      threads: 1
+  target: dev

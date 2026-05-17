@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: monthly_spending
+    columns:
+      - name: month
+        tests:
+          - not_null
+      - name: category_name
+        tests:
+          - not_null
+
+  - name: category_trends
+    columns:
+      - name: month
+        tests:
+          - not_null
+      - name: category_name
+        tests:
+          - not_null
+
+  - name: net_worth
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null

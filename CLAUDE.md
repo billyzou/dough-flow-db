@@ -5,39 +5,42 @@ A local PostgreSQL database for tracking personal finances — accounts, transac
 ## Purpose
 This is a learning project for building DE skills (pipeline design, schema management, orchestration).
 Prefer explicit, readable patterns over clever abstractions — the goal is understanding the plumbing,
-not shipping production code. Avoid introducing orchestration tools (Airflow, Prefect, dbt) until
-the core pipeline is working end-to-end.
+not shipping production code.
 
 ## Goal
 Build a personal finance pipeline that pulls real transaction data from bank accounts via Plaid,
-stores it in a local PostgreSQL database, and enables querying/analysis of spending over time.
-Real banks connected via Plaid production (Wealthfront live; Chase/Amex/Citi pending OAuth review).
-Eventually: automate syncing and add observability.
+stores it in a PostgreSQL database, and enables querying/analysis of spending over time.
+All v1 banks enrolled (Wealthfront, Chase, Citi). Pipeline runs daily via Airflow on a home server.
+Next: dbt transformations, BI dashboard.
 
 ## Stack
-- PostgreSQL 14+
+- PostgreSQL 14 (runs in Docker)
 - Python (ingestion scripts)
+- Airflow 2.9.1 (runs in Docker, schedules daily ingest)
 - SQL schema managed via `sql/schema.sql`
 - Credentials via `.env` (never commit this)
-- Running on WSL2 (Ubuntu)
+- Docker Compose stack deployed on home server (Windows 10 + WSL2)
 
 ## Database
 - Name: `dough_flow_db`
 - Connection via env vars: DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
-- PostgreSQL installed and running on WSL2; DB and user `bzou` created as owner
+- Runs in Docker container `dough-flow-db-postgres-1`; exposed on port 5433
+- Same container also hosts `airflow_meta` DB for Airflow internals
+- User `bzou` is superuser; `airflow` user has access but is not owner
 
 ## Plaid Integration
 - Provider: Plaid (switched back from Teller — Teller had weak security posture and no SOC2)
 - Auth: `client_id` + environment-specific `secret` via API; no mTLS
 - Required `.env` vars: PLAID_CLIENT_ID, PLAID_SECRET, PLAID_ENV, plus one PLAID_TOKEN_<BANK> per enrollment
-- Pricing: Free trial (10 production connections); Wealthfront live, Chase/Amex/Citi pending Plaid OAuth review
-- Planned enrollments (v1): Wealthfront (done), Chase, Amex, Citi (Schwab/wife/mortgage deferred)
+- Pricing: Free trial (10 production connections)
+- Enrolled (v1 complete): Wealthfront, Chase, Amex, Citi (Schwab/wife/mortgage deferred)
 - Token flow: `plaid_create_link_token.py` → `plaid_link.html` (browser) → `plaid_exchange_public_token.py` → add to `.env`
 - Upsert strategy: insert on `external_transaction_id`, DO NOTHING on conflict (idempotent re-runs)
 - Pending transactions: skip until posted to avoid ghost records
 - Pagination: implemented in `fetch_transactions()` (500 per page, loops until complete)
 - Chase/Wealthfront use OAuth (no credential handover); Plaid is SOC2 Type II + ISO 27001
-- Always invoke Python as `.venv/bin/python3` — system `python3` is NOT the venv (broken path pre-`src/` move)
+- Always invoke Python as `.venv/bin/python3` on local — system `python3` is NOT the venv (broken path pre-`src/` move)
+- In Docker, `python3` is correct — packages are installed directly into the Airflow image via `requirements.txt`
 
 ## Schema Decisions
 - All primary keys named specifically (e.g. `account_id`, `transaction_id`) not generic `id`
@@ -59,6 +62,9 @@ Eventually: automate syncing and add observability.
 - `recurring_rules` — templates for recurring transactions (rent, subscriptions, etc.)
 
 ## Project Structure
+- `docker-compose.yml` — full stack: postgres, airflow-init, airflow-scheduler, airflow-webserver
+- `Dockerfile` — extends `apache/airflow:2.9.1` with `requirements.txt`
+- `dags/ingest_plaid.py` — Airflow DAG; runs daily at 10am UTC
 - `sql/schema.sql` — table definitions, indexes, triggers
 - `sql/categories_seed.sql` — category taxonomy + Plaid PFC→category mappings
 - `sql/monthly_spending.sql`, `sql/category_trends.sql` — aggregation queries
