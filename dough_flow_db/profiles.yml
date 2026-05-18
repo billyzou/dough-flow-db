@@ -6,7 +6,7 @@ dough_flow_db:
       port: "{{ env_var('DB_PORT', '5433') | int }}"
       dbname: "{{ env_var('DB_NAME', 'dough_flow_db') }}"
       user: "{{ env_var('DB_USER', 'bzou') }}"
-      pass: "{{ env_var('DB_PASSWORD') }}"
+      password: "{{ env_var('DB_PASSWORD') }}"
       schema: public
       threads: 1
   target: dev

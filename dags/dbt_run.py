@@ -21,7 +21,7 @@ with DAG(
 
     dbt_run = BashOperator(
         task_id='dbt_run',
-        bash_command=f'dbt run --project-dir {REPO_ROOT}/dough_flow_db --profiles-dir {REPO_ROOT}/dough_flow_db',
+        bash_command=f'dbt --log-path /tmp/dbt_logs run --project-dir {REPO_ROOT}/dough_flow_db --profiles-dir {REPO_ROOT}/dough_flow_db --target-path /tmp/dbt_target',
     )
 
     wait_for_ingest >> dbt_run
