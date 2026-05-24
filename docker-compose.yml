@@ -56,15 +56,6 @@ services:
       - "8080:8080"
     restart: unless-stopped
 
-  metabase:
-    image: metabase/metabase:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - metabase_data:/metabase-data
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   airflow_logs:
-  metabase_data:
