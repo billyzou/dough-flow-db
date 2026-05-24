@@ -58,7 +58,9 @@ services:
     restart: unless-stopped
 
   superset-init:
-    image: apache/superset
+    build:
+      context: .
+      dockerfile: Dockerfile.superset
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,7 +72,9 @@ services:
     restart: "no"
 
   superset:
-    image: apache/superset
+    build:
+      context: .
+      dockerfile: Dockerfile.superset
     depends_on:
       postgres:
         condition: service_healthy
