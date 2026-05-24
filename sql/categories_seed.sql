@@ -50,3 +50,58 @@ FROM (VALUES
 ) AS v(external_category, category_name)
 JOIN categories c ON c.name = v.category_name
 ON CONFLICT (external_category) DO NOTHING;
+
+-- Map CSV/Teller category labels -> our category_id.
+-- These come from bank CSV exports and Teller's hierarchical labels.
+-- 'OTHER' left unmapped (too varied).
+INSERT INTO category_map (external_category, category_id)
+SELECT v.external_category, c.category_id
+FROM (VALUES
+    ('Shopping',                                        'Shopping'),
+    ('Groceries',                                       'Groceries'),
+    ('Food & Drink',                                    'Food'),
+    ('Travel',                                          'Travel'),
+    ('Home',                                            'Housing'),
+    ('Entertainment',                                   'Entertainment'),
+    ('Personal',                                        'Personal Care'),
+    ('Bills & Utilities',                               'Bills & Utilities'),
+    ('Fees & Adjustments-Fees & Adjustments',           'Bills & Utilities'),
+    ('BANK_FEES',                                       'Bills & Utilities'),
+    ('LOAN_DISBURSEMENTS',                              'Transfers'),
+    ('Merchandise & Supplies-Groceries',                'Groceries'),
+    ('Merchandise & Supplies-General Retail',           'Shopping'),
+    ('Merchandise & Supplies-Department Stores',        'Shopping'),
+    ('Merchandise & Supplies-Clothing Stores',          'Shopping'),
+    ('Merchandise & Supplies-Electronics Stores',       'Shopping'),
+    ('Merchandise & Supplies-Computer Supplies',        'Shopping'),
+    ('Merchandise & Supplies-Sporting Goods Stores',    'Shopping'),
+    ('Merchandise & Supplies-Hardware Supplies',        'Shopping'),
+    ('Merchandise & Supplies-Wholesale Stores',         'Shopping'),
+    ('Merchandise & Supplies-Arts & Jewelry',           'Shopping'),
+    ('Merchandise & Supplies-Furnishing',               'Shopping'),
+    ('Merchandise & Supplies-Florists & Garden',        'Shopping'),
+    ('Merchandise & Supplies-Pharmacies',               'Personal Care'),
+    ('Merchandise & Supplies-Internet Purchase',        'Shopping'),
+    ('Restaurant-Restaurant',                           'Food'),
+    ('Restaurant-Bar & Café',                           'Food'),
+    ('Transportation-Taxis & Coach',                    'Transport'),
+    ('Transportation-Rail Services',                    'Transport'),
+    ('Transportation-Fuel',                             'Transport'),
+    ('Transportation-Parking Charges',                  'Transport'),
+    ('Transportation-Vehicle Leasing & Purchase',       'Transport'),
+    ('Other-Government Services',                       'Transport'),
+    ('Other-Miscellaneous',                             'Transfers'),
+    ('Travel-Airline',                                  'Travel'),
+    ('Travel-Lodging',                                  'Travel'),
+    ('Travel-Travel Agencies',                          'Travel'),
+    ('Entertainment-Other Entertainment',               'Entertainment'),
+    ('Entertainment-General Events',                    'Entertainment'),
+    ('Communications-Cable & Internet Comm',            'Bills & Utilities'),
+    ('Communications-Telephone Comm',                   'Bills & Utilities'),
+    ('Business Services-Office Supplies',               'Shopping'),
+    ('Business Services-Professional Services',         'Shopping'),
+    ('Business Services-Insurance Services',            'Bills & Utilities'),
+    ('Business Services-Internet Services',             'Bills & Utilities')
+) AS v(external_category, category_name)
+JOIN categories c ON c.name = v.category_name
+ON CONFLICT (external_category) DO NOTHING;

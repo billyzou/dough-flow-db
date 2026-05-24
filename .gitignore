@@ -51,3 +51,6 @@ scripts/explore_plaid_response.py
 
 # ─── Claude Code local config ────────────────────────────────
 .claude/
+
+# ─── Local-only scripts (contain personally identifying data) ─
+scripts/categorize_csv_backfill.py
