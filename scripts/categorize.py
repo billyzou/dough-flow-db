@@ -5,8 +5,11 @@ categorize.py
 Assigns category_id to any transactions that don't have one yet,
 using the category_map lookup table.
 
-Run after ingest_teller.py.
-Safe to re-run — only touches rows where category_id IS NULL.
+Run after ingest_plaid.py. Safe to re-run — only touches rows where
+category_id IS NULL.
+
+Note: CSV historical import backfill was done via a one-time script
+(scripts/categorize_csv_backfill.py, kept local — not committed).
 """
 
 import logging
