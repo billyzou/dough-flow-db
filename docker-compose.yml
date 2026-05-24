@@ -30,8 +30,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/docker-init/01_airflow_meta.sql:/docker-entrypoint-initdb.d/01_airflow_meta.sql
-      - ./sql/schema.sql:/docker-entrypoint-initdb.d/02_schema.sql
-      - ./sql/categories_seed.sql:/docker-entrypoint-initdb.d/03_categories_seed.sql
+      - ./sql/docker-init/02_superset_meta.sql:/docker-entrypoint-initdb.d/02_superset_meta.sql
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/03_schema.sql
+      - ./sql/categories_seed.sql:/docker-entrypoint-initdb.d/04_categories_seed.sql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${DB_USER}", "-d", "${DB_NAME}"]
       interval: 5s
@@ -56,6 +57,32 @@ services:
       - "8080:8080"
     restart: unless-stopped
 
+  superset-init:
+    image: apache/superset
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@postgres/superset_meta
+    command: bash -c "superset db upgrade && superset fab create-admin --username admin --firstname Admin --lastname User --email admin@localhost --password admin && superset init"
+    restart: "no"
+
+  superset:
+    image: apache/superset
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://superset:superset@postgres/superset_meta
+    ports:
+      - "8088:8088"
+    volumes:
+      - superset_data:/app/superset_home
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   airflow_logs:
+  superset_data:
