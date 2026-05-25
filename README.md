@@ -103,6 +103,6 @@ Everything runs in Docker Compose on a home Ubuntu server.
 
 ---
 
-## Enrolled banks
+## Enrolled institutions
 
-Wealthfront, Chase, Amex, Citi — all via Plaid production credentials. Fidelity 401k accounts added manually (Plaid blocks dev accounts for Fidelity; SnapTrade rejected on similar security grounds).
+Four institutions enrolled via Plaid production credentials (mix of checking, credit, and investment accounts). One investment account provider added manually — Plaid blocks dev-tier access for that institution; alternatives evaluated and rejected on security grounds.
