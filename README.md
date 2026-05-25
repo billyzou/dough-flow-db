@@ -9,19 +9,56 @@ Built as a hands-on DE learning project: the goal is understanding the plumbing,
 ## Pipeline
 
 ```
-Plaid API  (production, 4 banks enrolled)
-    │
-    ▼
-scripts/ingest_plaid.py   ← Airflow triggers this daily at 10am UTC
-    │  psycopg2 upsert on external_transaction_id
-    ▼
-PostgreSQL 14  (dough_flow_db)
-    │
-    ▼
-dbt  (staging views → mart views)
-    │
-    ▼
-Apache Superset  (self-hosted, spending dashboards)
+┌─────────────────────────────────────────────────────────────────────┐
+│  SOURCES                                                            │
+│                                                                     │
+│  Bank API (Plaid) ───────────────────────────────┐                  │
+│  CSV backfill ───────────────────────────────────┤                  │
+│  Manual entry (investment balances) ─────────────┤                  │
+└──────────────────────────────────────────────────┼──────────────────┘
+                                                   │
+                    ┌──────────────────────────────▼──────────────────┐
+                    │  INGESTION  (Airflow · daily 10am UTC)           │
+                    │                                                  │
+                    │  ingest_plaid.py                                 │
+                    │  · idempotent upsert (dedup on ext. ID)          │
+                    │  · late-arriving data handled (skip pending)     │
+                    │  · audit log → pipeline_runs                     │
+                    │                                                  │
+                    │  categorize.py                                   │
+                    │  · label enrichment via category_map             │
+                    └──────────────────────────────┬──────────────────┘
+                                                   │
+                    ┌──────────────────────────────▼──────────────────┐
+                    │  LOAD  (PostgreSQL · dough_flow_db)              │
+                    │                                                  │
+                    │  accounts          account_balances              │
+                    │  transactions      pipeline_runs (observability) │
+                    │  categories                                      │
+                    │  category_map                                    │
+                    └──────────────────────────────┬──────────────────┘
+                                                   │
+                    ┌──────────────────────────────▼──────────────────┐
+                    │  TRANSFORM  (dbt · orchestrated by Airflow)      │
+                    │                                                  │
+                    │  staging/          · type casting                │
+                    │  └── stg_transactions  · field rename            │
+                    │                                                  │
+                    │  marts/            · analysis-ready aggregates   │
+                    │  ├── monthly_spending                            │
+                    │  ├── category_trends                             │
+                    │  └── net_worth                                   │
+                    └──────────────────────────────┬──────────────────┘
+                                                   │
+                    ┌──────────────────────────────▼──────────────────┐
+                    │  SERVING  (Apache Superset)                      │
+                    │                                                  │
+                    │  [planned] scorecards                            │
+                    │  [planned] spend by category                     │
+                    │  [planned] top merchants                         │
+                    │  [planned] monthly trend                         │
+                    │  [planned] net cash flow                         │
+                    └─────────────────────────────────────────────────┘
 ```
 
 Everything runs in Docker Compose on a home Ubuntu server.
@@ -50,8 +87,6 @@ Everything runs in Docker Compose on a home Ubuntu server.
 | `account_balances` | Point-in-time balance snapshots per account |
 | `categories` | Hierarchical income/expense taxonomy (supports sub-categories) |
 | `category_map` | Maps Plaid's Personal Finance Category labels to local categories |
-| `budgets` | Monthly or yearly spending limits per category |
-| `transfers` | Money moved between own accounts |
 | `pipeline_runs` | Observability: rows fetched/inserted/errors/runtime per DAG run |
 
 ---
