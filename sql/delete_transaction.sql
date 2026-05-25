@@ -1,6 +1,5 @@
 -- Copy/paste this, replace merchant name:
--- cd /home/billy/dough-flow-db (on server: ssh billy@192.168.2.117 first)
--- docker exec -i dough-flow-db-postgres-1 psql -U bzou -d dough_flow_db -v merchant='Some Merchant' -f - < sql/delete_transaction.sql
+-- docker exec -i dough-flow-db-postgres-1 psql -U $DB_USER -d dough_flow_db -v merchant='Some Merchant' -f - < sql/delete_transaction.sql
 
 BEGIN;
 

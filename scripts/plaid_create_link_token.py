@@ -38,7 +38,7 @@ client = plaid_api.PlaidApi(plaid.ApiClient(config))
 
 response = client.link_token_create(
     LinkTokenCreateRequest(
-        user=LinkTokenCreateRequestUser(client_user_id='bzou'),
+        user=LinkTokenCreateRequestUser(client_user_id=os.environ.get('DB_USER', 'user')),
         client_name='dough-flow-db',
         products=[Products('transactions')],
         country_codes=[CountryCode('US')],
