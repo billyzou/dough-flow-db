@@ -19,6 +19,21 @@ models:
         tests:
           - not_null
 
+  - name: monthly_cash_flow
+    columns:
+      - name: month
+        tests:
+          - not_null
+      - name: category_type
+        tests:
+          - not_null
+
+  - name: top_merchants
+    columns:
+      - name: merchant
+        tests:
+          - not_null
+
   - name: net_worth
     columns:
       - name: account_id

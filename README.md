@@ -147,9 +147,7 @@ Everything runs in Docker Compose on a home Ubuntu server.
 │   └── plaid_link.html       # Browser UI for Plaid Link enrollment
 ├── sql/
 │   ├── schema.sql            # Table definitions, indexes, triggers
-│   ├── categories_seed.sql   # Category taxonomy + Plaid PFC mappings
-│   ├── monthly_spending.sql
-│   └── category_trends.sql
+│   └── categories_seed.sql   # Category taxonomy + Plaid PFC mappings
 ├── docker-compose.yml        # Full stack: postgres, airflow, superset
 ├── Dockerfile                # Airflow image + requirements
 ├── Dockerfile.superset       # Superset image + psycopg2-binary
