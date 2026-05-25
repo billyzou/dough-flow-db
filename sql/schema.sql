@@ -72,18 +72,6 @@ CREATE TABLE IF NOT EXISTS budgets (
     updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS recurring_rules (
-    rule_id       SERIAL PRIMARY KEY,
-    account_id    INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    category_id   INT          REFERENCES categories(category_id) ON DELETE SET NULL,
-    amount        NUMERIC(15, 2) NOT NULL,
-    description   TEXT,
-    merchant      VARCHAR(150),
-    frequency     VARCHAR(20)  NOT NULL CHECK (frequency IN ('daily', 'weekly', 'biweekly', 'monthly', 'yearly')),
-    next_due_date DATE         NOT NULL,
-    is_active     BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
 
 CREATE INDEX IF NOT EXISTS idx_transactions_account_id  ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_category_id ON transactions(category_id);
