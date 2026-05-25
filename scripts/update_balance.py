@@ -5,8 +5,8 @@ update_balance.py
 Manually insert or update an account balance snapshot for today.
 
 Usage:
-    .venv/bin/python3 scripts/update_balance.py "Fidelity 401k" 42000.00
-    .venv/bin/python3 scripts/update_balance.py "Fidelity 401k" 42000.00 --date 2026-05-01
+    .venv/bin/python3 scripts/update_balance.py "My Investment Account" 42000.00
+    .venv/bin/python3 scripts/update_balance.py "My Investment Account" 42000.00 --date 2026-05-01
 """
 
 import argparse
