@@ -35,12 +35,12 @@ DESCRIPTION_PATTERNS = [
     ('%PAYROLL%',               'Income'),
     ('%EDI PAYMNT%',            'Income'),   # direct deposit (ACH format)
     ('%EDI PYMT%',              'Income'),   # payroll variant ACH format
-    ('%UI Deposit%',            'Income'),   # unemployment insurance
     ('INTEREST PAYMENT',        'Income'),
     ('% interest',              'Income'),   # monthly savings interest
 
-    # Loan Payments
-    ('%HOME MTG%',              'Loan Payments'),
+    # Loan Payments — add your mortgage/loan description patterns
+    # ('%HOME MTG%',            'Loan Payments'),
+    # ('%LOAN PMT%',            'Loan Payments'),
 
     # Transfers — add your brokerage, credit card, and bank transfer patterns
     # ('%EDI PYMNTS%',          'Transfers'),   # brokerage transfer
