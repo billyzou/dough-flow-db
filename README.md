@@ -6,7 +6,29 @@ Built as a hands-on DE learning project: the goal is understanding the plumbing,
 
 ---
 
-## Pipeline
+## High-level pipeline
+
+```
+Plaid API  (production, 4 banks enrolled)
+    │
+    ▼
+scripts/ingest_plaid.py   ← Airflow triggers this daily at 10am UTC
+    │  psycopg2 upsert on external_transaction_id
+    ▼
+PostgreSQL 14  (dough_flow_db)
+    │
+    ▼
+dbt  (staging views → mart views)
+    │
+    ▼
+Apache Superset  (self-hosted, spending dashboards)
+```
+
+Everything runs in Docker Compose on a home Ubuntu server.
+
+---
+
+## Detailed pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -60,8 +82,6 @@ Built as a hands-on DE learning project: the goal is understanding the plumbing,
                     │  [planned] net cash flow                         │
                     └─────────────────────────────────────────────────┘
 ```
-
-Everything runs in Docker Compose on a home Ubuntu server.
 
 ---
 
