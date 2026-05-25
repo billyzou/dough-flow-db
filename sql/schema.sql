@@ -50,22 +50,9 @@ CREATE TABLE IF NOT EXISTS transactions (
     updated_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS budgets (
-    budget_id     SERIAL PRIMARY KEY,
-    category_id   INT          NOT NULL REFERENCES categories(category_id) ON DELETE CASCADE,
-    amount        NUMERIC(15, 2) NOT NULL CHECK (amount >= 0),
-    period        VARCHAR(10)  NOT NULL CHECK (period IN ('monthly', 'yearly')),
-    start_date    DATE         NOT NULL,
-    end_date      DATE,
-    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-);
-
-
 CREATE INDEX IF NOT EXISTS idx_transactions_account_id  ON transactions(account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_category_id ON transactions(category_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_budgets_category_id      ON budgets(category_id);
 
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
@@ -85,10 +72,6 @@ CREATE OR REPLACE TRIGGER trg_transactions_updated_at
     FOR EACH ROW 
     EXECUTE FUNCTION update_updated_at();
 
-CREATE OR REPLACE TRIGGER trg_budgets_updated_at
-    BEFORE UPDATE ON budgets 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at();
 
 CREATE TABLE IF NOT EXISTS account_balances (
     balance_id    SERIAL PRIMARY KEY,
