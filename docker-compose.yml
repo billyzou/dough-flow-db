@@ -8,6 +8,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow_meta
     AIRFLOW__CORE__FERNET_KEY: ${FERNET_KEY}
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+    AIRFLOW__WEBSERVER__SESSION_COOKIE_NAME: airflow_session
     DB_HOST: postgres
   volumes:
     - ./dags:/opt/airflow/dags
@@ -68,6 +69,7 @@ services:
       SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
     volumes:
       - superset_data:/app/superset_home
+      - ./superset_config.py:/app/pythonpath/superset_config.py
     command: bash -c "superset db upgrade && superset fab create-admin --username admin --firstname Admin --lastname User --email admin@localhost --password admin && superset init"
     restart: "no"
 
@@ -84,6 +86,7 @@ services:
       - "8088:8088"
     volumes:
       - superset_data:/app/superset_home
+      - ./superset_config.py:/app/pythonpath/superset_config.py
     restart: unless-stopped
 
 volumes:
