@@ -50,17 +50,6 @@ CREATE TABLE IF NOT EXISTS transactions (
     updated_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS transfers (
-    transfer_id         SERIAL PRIMARY KEY,
-    from_account_id     INT NOT NULL REFERENCES accounts(account_id),
-    to_account_id       INT NOT NULL REFERENCES accounts(account_id),
-    amount              NUMERIC(15, 2) NOT NULL CHECK (amount > 0),
-    transfer_date       DATE NOT NULL,
-    notes               TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_different_accounts CHECK (from_account_id <> to_account_id)
-);
-
 CREATE TABLE IF NOT EXISTS budgets (
     budget_id     SERIAL PRIMARY KEY,
     category_id   INT          NOT NULL REFERENCES categories(category_id) ON DELETE CASCADE,
