@@ -55,3 +55,4 @@ CLAUDE.md
 
 # ─── Local-only scripts (contain personally identifying data) ─
 scripts/categorize_csv_backfill.py
+scripts/delete_transactions.py
