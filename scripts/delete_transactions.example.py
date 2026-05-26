@@ -20,10 +20,10 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
 
-# Replace with the merchant names you want to remove.
 MERCHANTS_TO_DELETE = [
-    'Some Merchant Name',
-    'Another Merchant',
+    m.strip()
+    for m in os.environ.get('MERCHANTS_TO_DELETE', '').split(',')
+    if m.strip()
 ]
 
 
