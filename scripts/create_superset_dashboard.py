@@ -5,9 +5,12 @@ Creates the Personal Finance Superset dashboard via the Superset REST API.
 Run from repo root:
   .venv/bin/python3 scripts/create_superset_dashboard.py
 
-Re-running creates duplicate charts/dashboard — delete old ones via the UI first.
+Re-running creates duplicate charts/dashboard — delete old ones via the UI first,
+or use the --delete flag to delete existing dashboard+charts by title before recreating:
+  .venv/bin/python3 scripts/create_superset_dashboard.py --delete
 """
 
+import argparse
 import json
 import os
 import uuid
@@ -17,6 +20,7 @@ import requests
 BASE_URL = os.getenv("SUPERSET_URL", "http://192.168.2.117:8088")
 ADMIN_USER = os.getenv("SUPERSET_USER", "admin")
 ADMIN_PASS = os.getenv("SUPERSET_PASS", "admin")
+DASHBOARD_TITLE = "Personal Finance"
 
 
 def uid():
@@ -86,21 +90,74 @@ def create_chart(session, name, viz_type, ds_id, params):
     return chart_id
 
 
+def delete_existing(session):
+    # Delete dashboards matching the title
+    q = json.dumps({"filters": [{"col": "dashboard_title", "opr": "ChartSearch", "value": DASHBOARD_TITLE}]})
+    r = session.get(f"{BASE_URL}/api/v1/dashboard/", params={"q": q})
+    r.raise_for_status()
+    for d in r.json().get("result", []):
+        if d["dashboard_title"] == DASHBOARD_TITLE:
+            session.delete(f"{BASE_URL}/api/v1/dashboard/{d['id']}")
+            print(f"  Deleted dashboard id={d['id']}")
+
+    # Delete all charts (fetch up to 100)
+    r = session.get(f"{BASE_URL}/api/v1/chart/", params={"q": json.dumps({"page_size": 100})})
+    r.raise_for_status()
+    for c in r.json().get("result", []):
+        session.delete(f"{BASE_URL}/api/v1/chart/{c['id']}")
+        print(f"  Deleted chart id={c['id']} '{c['slice_name']}'")
+    refresh_csrf(session)
+
+
 def build_layout(chart_ids):
     """
-    Row 1: MTD Spend (w=6)       | MTD Income (w=6)
-    Row 2: Spend by Category (w=5) | Top Merchants (w=7)
-    Row 3: Monthly Spend by Category (w=12)
-    Row 4: Net Cash Flow (w=12)
+    Row 1: YTD Cumulative (w=6)          | MTD Cumulative (w=6)
+    Row 2: YTD by Category (w=6)         | MTD by Category (w=6)
+    Row 3: (empty w=6)                   | MTD % of Total (w=6)
+    Row 4: Monthly Spend by Category (w=12)
+    Row 5: Net Cash Flow (w=8)           | Top Merchants (w=4)
 
-    chart_ids order: spend, income, by_category, monthly_trend, top_merchants, net_cash_flow
+    chart_ids order:
+      0: YTD Cumulative
+      1: MTD Cumulative
+      2: MTD by Category
+      3: Top Merchants
+      4: Monthly Spend by Category
+      5: Net Cash Flow
+      6: YTD by Category
+      7: MTD % of Total
     """
+    glossary_md = """## Category Glossary
+
+| Category | What's included |
+|---|---|
+| **Bills & Utilities** | Recurring fixed bills — phone, internet, cable, insurance, utilities, bank fees, government services |
+| **Entertainment** | Streaming services, concerts, events, gifts, donations |
+| **Food & Groceries** | All food spend — groceries (Whole Foods, Trader Joe's, Nijiya), restaurants, bars, cafés, food delivery |
+| **Health & Wellness** | Gym memberships, fitness classes, wellness services |
+| **Housing** | Rent, home improvement, maintenance, repairs |
+| **Loan Payments** | Mortgage payments, credit card payments, any debt service |
+| **Personal Care** | Medical, pharmacy, haircuts, personal hygiene services |
+| **Shopping** | General retail — clothing, electronics, household goods, department stores, online purchases |
+| **Transport** | Rideshare (Uber, Lyft), public transit, gas, parking, car-related expenses |
+| **Travel** | Flights, hotels, travel agencies — trips away from home |
+| **Transfers** | Internal transfers between your own accounts — excluded from all spend charts |
+| **Income** | All inflows — paychecks, reimbursements, interest, any money coming in |
+
+---
+
+**Notes**
+- Transfers are excluded from all spend and income totals to avoid double-counting.
+- Loan Payments includes both mortgage and credit card payments. Credit card purchases are captured in their respective categories at transaction time.
+- 12-mo Avg on the MTD chart is a rolling average of the last 12 fully completed calendar months.
+- Prior Year columns compare the same time period one year ago.
+"""
     pos = {
         "DASHBOARD_VERSION_KEY": "v2",
         "ROOT_ID": {"type": "ROOT", "id": "ROOT_ID", "children": ["GRID_ID"]},
         "GRID_ID": {
             "type": "GRID", "id": "GRID_ID",
-            "children": ["ROW-1", "ROW-2", "ROW-3", "ROW-4"],
+            "children": ["ROW-1", "ROW-GLOSSARY", "ROW-2", "ROW-3", "ROW-4", "ROW-5"],
             "parents": ["ROOT_ID"],
         },
     }
@@ -120,14 +177,28 @@ def build_layout(chart_ids):
             "parents": ["ROOT_ID", "GRID_ID"],
         }
 
-    add_row("ROW-1", [add_chart(chart_ids[0], 6, 36), add_chart(chart_ids[1], 6, 36)])
-    add_row("ROW-2", [add_chart(chart_ids[2], 5, 70), add_chart(chart_ids[4], 7, 70)])
-    add_row("ROW-3", [add_chart(chart_ids[3], 12, 80)])
-    add_row("ROW-4", [add_chart(chart_ids[5], 12, 70)])
+    add_row("ROW-1", [add_chart(chart_ids[0], 6, 50), add_chart(chart_ids[1], 6, 50)])
+
+    # Native markdown glossary — sits between cumulative charts and category tables
+    pos["MARKDOWN-GLOSSARY"] = {
+        "type": "MARKDOWN", "id": "MARKDOWN-GLOSSARY", "children": [],
+        "parents": ["ROOT_ID", "GRID_ID", "ROW-GLOSSARY"],
+        "meta": {"width": 12, "height": 100, "code": glossary_md},
+    }
+    add_row("ROW-GLOSSARY", ["MARKDOWN-GLOSSARY"])
+
+    add_row("ROW-2", [add_chart(chart_ids[6], 6, 62), add_chart(chart_ids[2], 6, 62)])
+    add_row("ROW-3", [add_chart(chart_ids[4], 12, 80)])
+    add_row("ROW-4", [add_chart(chart_ids[7], 12, 80)])
+    add_row("ROW-5", [add_chart(chart_ids[5], 8, 70), add_chart(chart_ids[3], 4, 70)])
     return pos
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--delete", action="store_true", help="Delete existing dashboard and charts before recreating")
+    args = parser.parse_args()
+
     s = requests.Session()
     s.headers["Content-Type"] = "application/json"
 
@@ -135,45 +206,89 @@ def main():
     login(s)
     refresh_csrf(s)
 
+    if args.delete:
+        print("\nDeleting existing charts and dashboard...")
+        delete_existing(s)
+
     print("Fetching dataset IDs...")
     ds = {n: get_dataset_id(s, n) for n in [
         "monthly_cash_flow", "monthly_spending", "category_trends", "top_merchants",
+        "daily_cumulative_ytd", "daily_cumulative_mtd", "mtd_avg_reference",
+        "category_comparison",
     ]}
     for name, did in ds.items():
         print(f"  {name}: {did}")
 
     current_month = sql_filter("month = date_trunc('month', current_date)::date")
+    mtd_date = sql_filter("date >= date_trunc('month', current_date)::date")
 
     print("\nCreating charts...")
     chart_ids = []
 
-    # 0: MTD Spend
-    chart_ids.append(create_chart(s, "MTD Spend", "big_number_total", ds["monthly_cash_flow"], {
-        "metric": sql_metric("ABS(SUM(total))", "MTD Spend"),
-        "adhoc_filters": [current_month, simple_filter("category_type", "expense")],
+    expense_only = simple_filter("category_type", "expense")
+
+    # 0: YTD cumulative spend — this year vs prior year
+    chart_ids.append(create_chart(s, "YTD Cumulative Spend", "echarts_timeseries_line", ds["daily_cumulative_ytd"], {
+        "metrics": [sql_metric("SUM(cumulative_total)", "Spend")],
+        "groupby": ["year"],
+        "x_axis": "date",
+        "adhoc_filters": [expense_only],
         "y_axis_format": "$,.0f",
-        "subheader": "this month",
+        "rich_tooltip": True,
+        "tooltipTimeFormat": "%b %d",
+        "x_axis_time_format": "%b %d",
+        "smooth": False,
     }))
 
-    # 1: MTD Income
-    chart_ids.append(create_chart(s, "MTD Income", "big_number_total", ds["monthly_cash_flow"], {
-        "metric": sql_metric("SUM(total)", "MTD Income"),
-        "adhoc_filters": [current_month, simple_filter("category_type", "income")],
+    # 1: MTD cumulative spend — this month vs prior year month + 12-mo avg flat line
+    chart_ids.append(create_chart(s, "MTD Cumulative Spend", "echarts_timeseries_line", ds["daily_cumulative_mtd"], {
+        "metrics": [
+            sql_metric("MAX(this_month)", "This Month"),
+            sql_metric("MAX(prior_year_month)", "Prior Year"),
+            sql_metric("MAX(avg_monthly_spend)", "12-mo Avg"),
+        ],
+        "groupby": [],
+        "x_axis": "date",
+        "adhoc_filters": [],
         "y_axis_format": "$,.0f",
-        "subheader": "this month",
+        "rich_tooltip": True,
+        "tooltipTimeFormat": "%b %d",
+        "x_axis_time_format": "%b %d",
+        "smooth": False,
     }))
 
-    # 2: Spend by Category (pie, current month)
-    chart_ids.append(create_chart(s, "Spend by Category", "pie", ds["monthly_spending"], {
-        "metric": sql_metric("ABS(SUM(total))", "Total Spent"),
-        "groupby": ["category_name"],
-        "adhoc_filters": [current_month],
-        "label_type": "key_percent",
-        "show_legend": True,
-        "donut": False,
+    # 2: MTD Spend by Category (table)
+    chart_ids.append(create_chart(s, "MTD Spend by Category", "table", ds["category_comparison"], {
+        "all_columns": ["category_name", "this_month", "last_year_month", "monthly_avg_12mo"],
+        "metrics": [],
+        "groupby": [],
+        "adhoc_filters": [],
+        "row_limit": 50,
+        "page_length": 50,
+        "column_config": {
+            "this_month":        {"d3NumberFormat": "$,.0f", "columnWidth": 120, "showCellBars": False},
+            "last_year_month":   {"d3NumberFormat": "$,.0f", "columnWidth": 120, "showCellBars": False},
+            "monthly_avg_12mo":  {"d3NumberFormat": "$,.0f", "columnWidth": 120, "showCellBars": False},
+        },
+        "order_by_cols": [json.dumps(["this_month", False])],
     }))
 
-    # 3: Monthly Spend by Category (stacked bar, last 12 months)
+    # 3: Top Merchants (table)
+    chart_ids.append(create_chart(s, "Top Merchants", "table", ds["top_merchants"], {
+        "all_columns": ["merchant", "total_spent", "transaction_count"],
+        "metrics": [],
+        "groupby": [],
+        "adhoc_filters": [],
+        "row_limit": 20,
+        "page_length": 20,
+        "column_config": {
+            "total_spent": {"d3NumberFormat": "$,.2f", "columnWidth": 120, "showCellBars": False},
+            "transaction_count": {"showCellBars": False},
+        },
+        "order_by_cols": [json.dumps(["total_spent", False])],
+    }))
+
+    # 4: Monthly Spend by Category (stacked bar, last 12 months)
     chart_ids.append(create_chart(s, "Monthly Spend by Category", "echarts_timeseries_bar", ds["category_trends"], {
         "metrics": [sql_metric("ABS(SUM(total))", "Total Spent")],
         "groupby": ["category_name"],
@@ -182,16 +297,9 @@ def main():
         "stack": True,
         "y_axis_format": "$,.0f",
         "rich_tooltip": True,
-    }))
-
-    # 4: Top Merchants (table)
-    chart_ids.append(create_chart(s, "Top Merchants", "table", ds["top_merchants"], {
-        "all_columns": ["merchant", "total_spent", "transaction_count"],
-        "metrics": [],
-        "groupby": [],
-        "adhoc_filters": [],
-        "row_limit": 20,
-        "page_length": 20,
+        "tooltipTimeFormat": "%b %Y",
+        "x_axis_time_format": "%b %Y",
+        "legendOrientation": "right",
     }))
 
     # 5: Net Cash Flow (grouped bar by month)
@@ -203,19 +311,72 @@ def main():
         "stack": False,
         "y_axis_format": "$,.0f",
         "rich_tooltip": True,
+        "tooltipTimeFormat": "%b %Y",
+        "x_axis_time_format": "%b %Y",
     }))
+
+    # 6: YTD Spend by Category (table)
+    chart_ids.append(create_chart(s, "YTD Spend by Category", "table", ds["category_comparison"], {
+        "all_columns": ["category_name", "this_year", "last_year"],
+        "metrics": [],
+        "groupby": [],
+        "adhoc_filters": [],
+        "row_limit": 50,
+        "page_length": 50,
+        "column_config": {
+            "this_year":  {"d3NumberFormat": "$,.0f", "columnWidth": 120, "showCellBars": False},
+            "last_year":  {"d3NumberFormat": "$,.0f", "columnWidth": 120, "showCellBars": False},
+        },
+        "order_by_cols": [json.dumps(["this_year", False])],
+    }))
+
+    # 7: Monthly Spend % of Total by Category (100% stacked bar)
+    chart_ids.append(create_chart(s, "Monthly Spend % by Category", "echarts_timeseries_bar", ds["category_trends"], {
+        "metrics": [sql_metric("ABS(SUM(total))", "Total Spent")],
+        "groupby": ["category_name"],
+        "x_axis": "month",
+        "adhoc_filters": [],
+        "stack": "Expand",
+        "y_axis_format": ".0%",
+        "rich_tooltip": True,
+        "tooltipTimeFormat": "%b %Y",
+        "x_axis_time_format": "%b %Y",
+        "legendOrientation": "right",
+    }))
+
+    # glossary text — added as a native MARKDOWN layout element, not a chart
 
     print("\nCreating dashboard...")
     position = build_layout(chart_ids)
+
+    # Native filters: date range on transaction_date (targets monthly mart columns via month)
+    native_filters = [
+        {
+            "id": f"NATIVE_FILTER_{uid()}",
+            "name": "Date Range",
+            "filterType": "filter_time",
+            "targets": [{}],
+            "defaultDataMask": {"filterState": {"value": "No filter"}},
+            "controlValues": {"enableEmptyFilter": False},
+            "cascadeParentIds": [],
+            "scope": {
+                "rootPath": ["ROOT_ID"],
+                "excluded": [],
+            },
+            "type": "NATIVE_FILTER",
+        }
+    ]
+
     r = s.post(f"{BASE_URL}/api/v1/dashboard/", json={
-        "dashboard_title": "Personal Finance",
+        "dashboard_title": DASHBOARD_TITLE,
         "published": True,
         "position_json": json.dumps(position),
+        "json_metadata": json.dumps({"native_filter_configuration": native_filters}),
     })
     if not r.ok:
         raise RuntimeError(f"Failed to create dashboard: {r.status_code} {r.text[:300]}")
     dash_id = r.json()["id"]
-    print(f"  ✓ Personal Finance (id={dash_id})")
+    print(f"  ✓ {DASHBOARD_TITLE} (id={dash_id})")
     print(f"\nDone: {BASE_URL}/superset/dashboard/{dash_id}/")
 
 
