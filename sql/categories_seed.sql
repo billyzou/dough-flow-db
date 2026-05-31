@@ -16,6 +16,7 @@ INSERT INTO categories (name, type) VALUES
     ('Personal Care',     'expense'),
     ('Loan Payments',     'expense'),
     ('Transfers',         'expense'),
+    ('Health & Wellness', 'expense'),
     ('Income',            'income')
 ON CONFLICT (name) DO NOTHING;
 
@@ -101,7 +102,13 @@ FROM (VALUES
     ('Business Services-Office Supplies',               'Shopping'),
     ('Business Services-Professional Services',         'Shopping'),
     ('Business Services-Insurance Services',            'Bills & Utilities'),
-    ('Business Services-Internet Services',             'Bills & Utilities')
+    ('Business Services-Internet Services',             'Bills & Utilities'),
+    -- Chase CSV categories
+    ('Health & Wellness',                               'Health & Wellness'),
+    ('Gas',                                             'Transport'),
+    ('Automotive',                                      'Transport'),
+    ('Fees & Adjustments',                              'Bills & Utilities'),
+    ('Gifts & Donations',                               'Entertainment')
 ) AS v(external_category, category_name)
 JOIN categories c ON c.name = v.category_name
 ON CONFLICT (external_category) DO NOTHING;
