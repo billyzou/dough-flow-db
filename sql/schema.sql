@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     institution      VARCHAR(100),
     currency         CHAR(3)      NOT NULL DEFAULT 'USD',
     balance          NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
+    owner            VARCHAR(20)  CHECK (owner IN ('husband', 'wife')),
     is_active        BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
