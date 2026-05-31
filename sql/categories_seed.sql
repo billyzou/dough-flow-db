@@ -5,8 +5,7 @@
 -- ============================================================
 
 INSERT INTO categories (name, type) VALUES
-    ('Groceries',         'expense'),
-    ('Food',              'expense'),
+    ('Food & Groceries',  'expense'),
     ('Shopping',          'expense'),
     ('Bills & Utilities', 'expense'),
     ('Transport',         'expense'),
@@ -34,7 +33,7 @@ DELETE FROM category_map WHERE external_category IN (
 INSERT INTO category_map (external_category, category_id)
 SELECT v.external_category, c.category_id
 FROM (VALUES
-    ('FOOD_AND_DRINK',      'Food'),
+    ('FOOD_AND_DRINK',      'Food & Groceries'),
     ('TRANSPORTATION',      'Transport'),
     ('TRAVEL',              'Travel'),
     ('ENTERTAINMENT',       'Entertainment'),
@@ -59,8 +58,8 @@ INSERT INTO category_map (external_category, category_id)
 SELECT v.external_category, c.category_id
 FROM (VALUES
     ('Shopping',                                        'Shopping'),
-    ('Groceries',                                       'Groceries'),
-    ('Food & Drink',                                    'Food'),
+    ('Groceries',                                       'Food & Groceries'),
+    ('Food & Drink',                                    'Food & Groceries'),
     ('Travel',                                          'Travel'),
     ('Home',                                            'Housing'),
     ('Entertainment',                                   'Entertainment'),
@@ -69,7 +68,7 @@ FROM (VALUES
     ('Fees & Adjustments-Fees & Adjustments',           'Bills & Utilities'),
     ('BANK_FEES',                                       'Bills & Utilities'),
     ('LOAN_DISBURSEMENTS',                              'Transfers'),
-    ('Merchandise & Supplies-Groceries',                'Groceries'),
+    ('Merchandise & Supplies-Groceries',                'Food & Groceries'),
     ('Merchandise & Supplies-General Retail',           'Shopping'),
     ('Merchandise & Supplies-Department Stores',        'Shopping'),
     ('Merchandise & Supplies-Clothing Stores',          'Shopping'),
@@ -83,8 +82,8 @@ FROM (VALUES
     ('Merchandise & Supplies-Florists & Garden',        'Shopping'),
     ('Merchandise & Supplies-Pharmacies',               'Personal Care'),
     ('Merchandise & Supplies-Internet Purchase',        'Shopping'),
-    ('Restaurant-Restaurant',                           'Food'),
-    ('Restaurant-Bar & Café',                           'Food'),
+    ('Restaurant-Restaurant',                           'Food & Groceries'),
+    ('Restaurant-Bar & Café',                           'Food & Groceries'),
     ('Transportation-Taxis & Coach',                    'Transport'),
     ('Transportation-Rail Services',                    'Transport'),
     ('Transportation-Fuel',                             'Transport'),
