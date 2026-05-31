@@ -113,19 +113,13 @@ Everything runs in Docker Compose on a home Ubuntu server.
 
 ## Key design decisions
 
-**Idempotent upserts** — transactions insert on `external_transaction_id` with `DO NOTHING` on conflict. Re-running the DAG never creates duplicates.
-
-**Skip pending transactions** — Plaid surfaces pending transactions before they post. Skipping them avoids ghost records that get amended or cancelled.
-
-**ELT, not ETL** — ingest stores raw Plaid data (including `external_category`, `merchant`, `transaction_type`). Category mapping runs separately via `categorize.py` and dbt. Clean separation between extract and transform.
-
-**Amount sign normalization at ingest** — Plaid uses positive = money out across all account types. We flip once on insert (`amount = -t['amount']`), so negative = expense and positive = income throughout the DB.
-
-**Observability table** — every DAG run writes a row to `pipeline_runs` with row counts, error messages, and runtime. No external monitoring needed at this scale.
-
-**Plaid over alternatives** — evaluated Teller (no SOC2, small company risk) and direct scraping. Plaid is SOC2 Type II + ISO 27001; Chase and Wealthfront use OAuth so no credentials are handed over.
-
-**dbt views, not tables** — all dbt models materialize as views. The dataset is small (~1,700 transactions) so there's no performance argument for tables, and views stay current automatically.
+- **Idempotent upserts** — transactions insert on `external_transaction_id` with `DO NOTHING` on conflict. Re-running the DAG never creates duplicates.
+- **Skip pending transactions** — Plaid surfaces pending transactions before they post. Skipping them avoids ghost records that get amended or cancelled.
+- **ELT, not ETL** — ingest stores raw Plaid data (including `external_category`, `merchant`, `transaction_type`). Category mapping runs separately via `categorize.py` and dbt. Clean separation between extract and transform.
+- **Amount sign normalization at ingest** — Plaid uses positive = money out across all account types. We flip once on insert (`amount = -t['amount']`), so negative = expense and positive = income throughout the DB.
+- **Observability table** — every DAG run writes a row to `pipeline_runs` with row counts, error messages, and runtime. No external monitoring needed at this scale.
+- **Plaid over alternatives** — evaluated Teller (no SOC2, small company risk) and direct scraping. Plaid is SOC2 Type II + ISO 27001; Chase and Wealthfront use OAuth so no credentials are handed over.
+- **dbt views, not tables** — all dbt models materialize as views. The dataset is small (<2,000 transactions) so there's no performance argument for tables, and views stay current automatically.
 
 ---
 
