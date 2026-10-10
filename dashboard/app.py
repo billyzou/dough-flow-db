@@ -1,5 +1,5 @@
 """
-Dough Flow dashboard (replaces Superset).
+Dough Flow dashboard.
 
 Reads the dbt marts live from Postgres. Runs as the `streamlit` service in
 docker-compose: http://<host>:8501

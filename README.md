@@ -1,6 +1,6 @@
 # dough-flow-db
 
-A self-hosted personal finance pipeline. Real bank transactions pulled daily from Plaid, stored in PostgreSQL, transformed with dbt, and visualized in Superset — all orchestrated by Airflow running on a home server.
+A self-hosted personal finance pipeline. Real bank transactions pulled daily from Plaid, stored in PostgreSQL, transformed with dbt, and visualized in a Streamlit dashboard — all orchestrated by Airflow running on a home server.
 
 Built as a hands-on DE learning project: the goal is understanding the plumbing, not shipping production code.
 
@@ -21,7 +21,7 @@ PostgreSQL 14  (dough_flow_db)
 dbt  (staging views → mart views)
     │
     ▼
-Apache Superset  (self-hosted, spending dashboards)
+Streamlit  (self-hosted, spending dashboard)
 ```
 
 Everything runs in Docker Compose on a home Ubuntu server.
@@ -73,13 +73,13 @@ Everything runs in Docker Compose on a home Ubuntu server.
                     └──────────────────────────────┬──────────────────┘
                                                    │
                     ┌──────────────────────────────▼──────────────────┐
-                    │  SERVING  (Apache Superset)                      │
+                    │  SERVING  (Streamlit · dashboard/app.py)         │
                     │                                                  │
-                    │  [planned] scorecards                            │
-                    │  [planned] spend by category                     │
-                    │  [planned] top merchants                         │
-                    │  [planned] monthly trend                         │
-                    │  [planned] net cash flow                         │
+                    │  YTD / MTD cumulative spend                      │
+                    │  spend by category (YTD, MTD)                    │
+                    │  monthly trend by category                       │
+                    │  net cash flow                                   │
+                    │  top merchants                                   │
                     └─────────────────────────────────────────────────┘
 ```
 
@@ -93,7 +93,7 @@ Everything runs in Docker Compose on a home Ubuntu server.
 | Orchestration | Apache Airflow 2.9.1 |
 | Storage | PostgreSQL 14 |
 | Transformation | dbt |
-| Visualization | Apache Superset |
+| Visualization | Streamlit |
 | Infrastructure | Docker Compose, home server (Ubuntu) |
 
 ---
@@ -126,6 +126,8 @@ Everything runs in Docker Compose on a home Ubuntu server.
 ## Project structure
 
 ```
+├── dashboard/
+│   └── app.py                # Streamlit dashboard (reads dbt marts live)
 ├── dags/
 │   ├── ingest_plaid.py       # Airflow DAG: daily ingest
 │   └── dbt_run.py            # dbt run (manual)
@@ -142,9 +144,9 @@ Everything runs in Docker Compose on a home Ubuntu server.
 ├── sql/
 │   ├── schema.sql            # Table definitions, indexes, triggers
 │   └── categories_seed.sql   # Category taxonomy + Plaid PFC mappings
-├── docker-compose.yml        # Full stack: postgres, airflow, superset
+├── docker-compose.yml        # Full stack: postgres, airflow, streamlit
 ├── Dockerfile                # Airflow image + requirements
-├── Dockerfile.superset       # Superset image + psycopg2-binary
+├── Dockerfile.streamlit      # Streamlit image + psycopg2-binary
 └── .env.example              # Required env vars (Plaid keys, DB creds)
 ```
 
