@@ -90,6 +90,23 @@ services:
       - ./superset_config.py:/app/pythonpath/superset_config.py
     restart: unless-stopped
 
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    env_file: .env
+    environment:
+      DB_HOST: postgres
+    volumes:
+      - ./dashboard:/app
+    command: streamlit run /app/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   airflow_logs:
