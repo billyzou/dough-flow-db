@@ -1,4 +1,0 @@
-FROM apache/superset:6.1.0
-USER root
-RUN /app/docker/pip-install.sh psycopg2-binary
-USER superset
