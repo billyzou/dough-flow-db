@@ -5,6 +5,7 @@ select
     t.description,
     t.merchant,
     t.external_category,
+    t.transaction_type,
     t.is_recurring,
     t.notes,
     a.account_id,
