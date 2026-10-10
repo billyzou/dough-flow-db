@@ -16,10 +16,15 @@ with DAG(
         bash_command = f'python3 {REPO_ROOT}/scripts/ingest_plaid.py'
     )
 
+    categorize = BashOperator(
+        task_id = 'categorize',
+        bash_command = f'python3 {REPO_ROOT}/scripts/categorize.py'
+    )
+
     clean_sensitive = BashOperator(
         task_id = 'clean_sensitive_transactions',
         bash_command = f'python3 {REPO_ROOT}/scripts/delete_transactions.py'
     )
 
-    run_ingest >> clean_sensitive
+    run_ingest >> categorize >> clean_sensitive
 
