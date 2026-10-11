@@ -2,10 +2,9 @@ select
     date_trunc('month', transaction_date)::date as month,
     category_name,
     category_type,
-    abs(sum(amount))                             as total,
+    sum(spend)                                   as total,
     count(*)                                     as transaction_count
 from {{ ref('stg_transactions') }}
-where category_type = 'expense'
-  and category_name != 'Transfers'
+where spend is not null
 group by 1, 2, 3
 order by 1 desc, total asc

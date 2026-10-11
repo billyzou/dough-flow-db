@@ -10,12 +10,10 @@ with spine as (
 
 avg_monthly as (
     select
-        abs(sum(amount)) / 12.0                   as avg_monthly_spend
+        sum(spend) / 12.0                         as avg_monthly_spend
     from {{ ref('stg_transactions') }}
     where
-        category_type = 'expense'
-        and category_name != 'Transfers'
-        and transaction_type != 'special'
+        spend is not null
         and transaction_date >= date_trunc('month', current_date - interval '12 months')
         and transaction_date <  date_trunc('month', current_date)
 )

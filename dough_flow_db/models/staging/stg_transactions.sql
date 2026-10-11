@@ -15,7 +15,11 @@ select
     a.owner,
     c.category_id,
     c.name         as category_name,
-    c.type         as category_type
+    c.type         as category_type,
+    -- Single definition of spending: every expense except Transfers, money out positive,
+    -- refunds negative. Card payments land in Loan Payments twice (out of checking, into
+    -- the card) and cancel; tests/card_payments_are_paired.sql guards that.
+    case when c.type = 'expense' and c.name != 'Transfers' then -t.amount end as spend
 from transactions t
 join accounts a using (account_id)
 left join categories c using (category_id)

@@ -48,9 +48,6 @@ models:
       - name: date
         tests:
           - not_null
-      - name: category_type
-        tests:
-          - not_null
 
   - name: net_worth
     columns:

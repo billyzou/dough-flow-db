@@ -2,12 +2,10 @@ with daily as (
     select
         transaction_date                          as date,
         category_type,
-        sum(abs(amount))                          as daily_total
+        sum(case category_type when 'income' then amount else spend end) as daily_total
     from {{ ref('stg_transactions') }}
     where
-        category_type in ('income', 'expense')
-        and category_name != 'Transfers'
-        and transaction_type != 'special'
+        (category_type = 'income' or spend is not null)
         and transaction_date >= date_trunc('year', current_date - interval '1 year')
     group by 1, 2
 ),
@@ -45,15 +43,11 @@ prior_year as (
         dt.date,
         dt.category_type,
         extract(year from dt.date - interval '1 year')::text as year,
-        coalesce(
-            (select sum(abs(amount))
-             from {{ ref('stg_transactions') }} t2
-             where t2.transaction_date = dt.date - interval '1 year'
-               and t2.category_type = dt.category_type
-               and t2.category_name != 'Transfers'
-               and t2.transaction_type != 'special'), 0
-        )                                         as daily_total
+        coalesce(d.daily_total, 0)                as daily_total
     from date_types dt
+    left join daily d
+        on d.date = (dt.date - interval '1 year')::date
+       and d.category_type = dt.category_type
 ),
 
 combined as (

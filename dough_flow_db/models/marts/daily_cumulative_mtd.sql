@@ -10,12 +10,10 @@ with spine as (
 current_daily as (
     select
         transaction_date                          as date,
-        sum(abs(amount))                          as daily_total
+        sum(spend)                          as daily_total
     from {{ ref('stg_transactions') }}
     where
-        category_type = 'expense'
-        and category_name != 'Transfers'
-        and transaction_type != 'special'
+        spend is not null
         and transaction_date >= date_trunc('month', current_date)
     group by 1
 ),
@@ -24,12 +22,10 @@ current_daily as (
 prior_daily as (
     select
         (transaction_date + interval '1 year')::date as date,
-        sum(abs(amount))                              as daily_total
+        sum(spend)                              as daily_total
     from {{ ref('stg_transactions') }}
     where
-        category_type = 'expense'
-        and category_name != 'Transfers'
-        and transaction_type != 'special'
+        spend is not null
         and transaction_date >= date_trunc('month', current_date - interval '1 year')
         and transaction_date <  date_trunc('month', current_date)
     group by 1
@@ -37,12 +33,10 @@ prior_daily as (
 
 -- avg monthly expense over last 12 fully completed calendar months
 avg_monthly as (
-    select abs(sum(amount)) / 12.0 as avg_monthly_spend
+    select sum(spend) / 12.0 as avg_monthly_spend
     from {{ ref('stg_transactions') }}
     where
-        category_type = 'expense'
-        and category_name != 'Transfers'
-        and transaction_type != 'special'
+        spend is not null
         and transaction_date >= date_trunc('month', current_date - interval '12 months')
         and transaction_date <  date_trunc('month', current_date)
 ),
