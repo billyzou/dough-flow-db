@@ -6,13 +6,17 @@ docker-compose: http://<host>:8501
 """
 
 import os
+from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import psycopg2
 import streamlit as st
 
-st.set_page_config(page_title='Dough Flow', layout='wide')
+ICON = str(Path(__file__).parent / 'assets' / 'icon.png')
+
+st.set_page_config(page_title='Dough Flow', page_icon=ICON, layout='wide')
+st.logo(ICON, size='large')
 
 # Categorical palette in fixed order; categories past the 7th fold into "Other"
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
