@@ -16,7 +16,45 @@ import streamlit as st
 ICON = str(Path(__file__).parent / 'assets' / 'icon.png')
 
 st.set_page_config(page_title='Dough Flow', page_icon=ICON, layout='wide')
-st.logo(ICON, size='large')
+
+# Icon and title sit in the top bar like a site nav: the header goes transparent, the page
+# moves up into it (default top padding is 6rem), and the title shrinks to wordmark size
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap');
+[data-testid="stHeader"] { background: transparent; }
+[data-testid="stMainBlockContainer"] { padding-top: 0; }
+/* this style block's own (empty) element would otherwise add a row gap above the title */
+[data-testid="stElementContainer"]:has(style) { display: none; }
+/* wordmark: dark green from the icon's tile; line-height 1 so it centers on the icon */
+[data-testid="stMainBlockContainer"] h1 {
+    font-family: 'Fredoka', sans-serif; font-weight: 600; font-size: 2rem; color: #2F6B4F;
+    padding: 0; line-height: 1;
+}
+/* title row and tab bar stay pinned while the page scrolls. Sticky goes on their wrappers,
+   which are exactly their height (sticky needs a taller parent). They sit below the Deploy
+   menu (stHeader) */
+[data-testid="stLayoutWrapper"]:has(> .st-key-masthead),
+[data-testid="stTabs"] div:has(> [data-baseweb="tab-list"]) {
+    position: sticky; z-index: 999;
+}
+/* content slides under the pinned bars, so they need the app's background. Only stApp paints
+   it, so every element from stApp down to the bars inherits it, matching light or dark theme */
+[data-testid="stApp"] :has(.st-key-masthead),
+[data-testid="stApp"] :has([data-baseweb="tab-list"]) { background-color: inherit; }
+/* the bottom padding covers the 1rem row gap below it (the negative margin keeps the layout
+   unchanged), so nothing shows between the bars */
+[data-testid="stLayoutWrapper"]:has(> .st-key-masthead) {
+    top: 0; padding: 0.5rem 0 1rem; margin-bottom: -1rem;
+}
+/* pinned exactly where the tabs sit at rest (0.5rem padding + 60px icon + 1rem row gap), so they don't shift */
+[data-testid="stTabs"] div:has(> [data-baseweb="tab-list"]) {
+    top: calc(1.5rem + 60px); box-shadow: 0 1px 0 rgba(49, 51, 63, 0.2);
+}
+/* the tab underline is a separate element that would scroll away; the box-shadow above replaces it */
+[data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
+</style>
+""", unsafe_allow_html=True)
 
 # Categorical palette in fixed order; categories past the 7th fold into "Other"
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
@@ -133,11 +171,13 @@ def month_axis(df):
                  axis=alt.Axis(labelAngle=0))
 
 
-st.title('Dough Flow')
+with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
+    st.image(ICON, width=60)
+    st.title('Dough Flow')
 
 categories = query('select * from category_comparison')
-this_month_tab, transactions_tab, trends_tab, net_worth_tab, glossary_tab = st.tabs(
-    ['This Month', 'Transactions', 'Trends', 'Net Worth', 'Glossary'])
+net_worth_tab, this_month_tab, transactions_tab, trends_tab, glossary_tab = st.tabs(
+    ['Net Worth', 'This Month', 'Transactions', 'Trends', 'Glossary'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -328,9 +368,11 @@ with net_worth_tab:
         from daily_balances
     """)
     balances['date'] = pd.to_datetime(balances['date'])
-    # Start once every bank-linked account has history, so linking one doesn't look like growth.
-    # Hand-entered accounts can begin later; they're left out of growth until they exist (below).
-    start = balances[balances['is_linked']].groupby('account_id')['date'].min().max()
+    # Start once every account linked in the initial setup (first 30 days) has history, so that
+    # setup doesn't look like growth. Accounts added later appear as a step on their first day;
+    # they're left out of growth until they exist (below).
+    first_seen = balances[balances['is_linked']].groupby('account_id')['date'].min()
+    start = first_seen[first_seen <= first_seen.min() + pd.Timedelta(days=30)].max()
     balances = balances[balances['date'] >= start]
 
     daily = balances.groupby('date', as_index=False)['value'].sum()
