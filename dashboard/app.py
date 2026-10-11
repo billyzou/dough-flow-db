@@ -60,6 +60,8 @@ st.markdown("""
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
 OTHER = '#898781'
 MAX_CATEGORIES = len(PALETTE)
+# First day of the daily Plaid ingest (dags/ingest_plaid.py)
+PLAID_SYNC_START = pd.Timestamp('2026-05-04')
 
 
 @st.cache_data(ttl=600)
@@ -370,9 +372,11 @@ with net_worth_tab:
     balances['date'] = pd.to_datetime(balances['date'])
     # Start once every account linked in the initial setup (first 30 days) has history, so that
     # setup doesn't look like growth. Accounts added later appear as a step on their first day;
-    # they're left out of growth until they exist (below).
+    # they're left out of growth until they exist (below). Setup is counted from when the daily
+    # Plaid sync began, not the oldest balance: two Chase accounts have 2025 balances from the
+    # CSV backfill, which would otherwise start the chart before most accounts existed.
     first_seen = balances[balances['is_linked']].groupby('account_id')['date'].min()
-    start = first_seen[first_seen <= first_seen.min() + pd.Timedelta(days=30)].max()
+    start = first_seen[first_seen <= PLAID_SYNC_START + pd.Timedelta(days=30)].max()
     balances = balances[balances['date'] >= start]
 
     daily = balances.groupby('date', as_index=False)['value'].sum()
