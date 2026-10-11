@@ -58,6 +58,11 @@ def money_table(df, columns, sort_by):
     )
 
 
+def money(x, sign=False):
+    prefix = '-' if x < 0 else '+' if sign else ''
+    return f'{prefix}${abs(x):,.0f}'
+
+
 def table_height(df):
     # Tall enough to show every row (35px rows + header) so the table never scrolls
     return (len(df) + 1) * 35 + 3
@@ -72,86 +77,192 @@ def month_axis(df):
 
 st.title('Dough Flow')
 
-# ---------- Row 1: cumulative spend ----------
-left, right = st.columns(2)
-
-with left:
-    st.subheader('YTD Cumulative Spend')
-    ytd = query("""
-        select date, year, cumulative_total
-        from daily_cumulative_ytd
-        where category_type = 'expense'
-    """)
-    years = sorted(ytd['year'].unique(), reverse=True)
-    st.altair_chart(
-        line_chart(ytd, 'date', 'cumulative_total', 'year', '%b %d',
-                   dict(zip(years, [PALETTE[0], OTHER] + PALETTE[1:]))),
-        use_container_width=True,
-    )
-
-with right:
-    st.subheader('MTD Cumulative Spend')
-    mtd = query('select date, this_month, prior_year_month, avg_monthly_spend from daily_cumulative_mtd')
-    mtd = mtd.rename(columns={
-        'this_month': 'This Month', 'prior_year_month': 'Prior Year', 'avg_monthly_spend': '12-mo Avg',
-    }).melt('date', var_name='series', value_name='spend')
-    st.altair_chart(
-        line_chart(mtd, 'date', 'spend', 'series', '%b %d',
-                   {'This Month': PALETTE[0], 'Prior Year': OTHER, '12-mo Avg': PALETTE[1]}),
-        use_container_width=True,
-    )
-
-# ---------- Row 2: category tables ----------
 categories = query('select * from category_comparison')
-left, right = st.columns(2)
+this_month_tab, transactions_tab, trends_tab, glossary_tab = st.tabs(
+    ['This Month', 'Transactions', 'Trends', 'Glossary'])
 
-with left:
-    st.subheader('YTD Spend by Category')
-    money_table(categories, {'category_name': 'Category', 'this_year': 'This Year', 'last_year': 'Prior Year'},
-                'this_year')
+# ---------- This Month: am I on track? ----------
+with this_month_tab:
+    mtd = query('select date, this_month, prior_year_month, avg_monthly_spend from daily_cumulative_mtd')
+    today = mtd.iloc[-1]
+    # 12-mo avg month spread evenly over the days, so "usual pace" by today's date
+    pace = today['avg_monthly_spend'] * today['date'].day / pd.Timestamp(today['date']).days_in_month
+    net_worth = query('select sum(net_worth_contribution) as total, min(snapshot_date) as oldest from net_worth').iloc[0]
+    syncs = query("""
+        select distinct on (enrollment) enrollment, started_at, success, error_message
+        from pipeline_runs
+        order by enrollment, started_at desc
+    """)
 
-with right:
-    st.subheader('MTD Spend by Category')
-    money_table(categories, {
-        'category_name': 'Category', 'this_month': 'This Month',
-        'last_year_month': 'Prior Year', 'monthly_avg_12mo': '12-mo Avg',
-    }, 'this_month')
+    spent, typical, worth, synced = st.columns(4)
+    spent.metric('Spent this month', money(today['this_month']),
+                 delta=f'{money(today["this_month"] - pace, sign=True)} vs usual pace', delta_color='inverse',
+                 help=f'Usual pace by today is {money(pace)}: the 12-mo avg spread evenly across the month', border=True)
+    typical.metric('Typical month', money(today['avg_monthly_spend']),
+                   help='Average spend over the last 12 full months', border=True)
+    worth.metric('Net worth', money(net_worth['total']), help='Latest balance of every active account, minus credit cards',
+                 border=True)
+    if (pd.Timestamp(today['date']) - pd.Timestamp(net_worth['oldest'])).days > 7:
+        worth.caption(f'Some balances last updated {net_worth["oldest"]:%b %d, %Y}')
+    last_sync = pd.Timestamp(syncs['started_at'].max()).tz_convert('America/Los_Angeles')
+    synced.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', border=True)
 
-# ---------- Rows 3-4: monthly spend by category ----------
-trends = query('select month, category_name, abs(total) as total from category_trends')
-ranked = trends.groupby('category_name')['total'].sum().sort_values(ascending=False).index.tolist()
-top = ranked[:MAX_CATEGORIES]
-trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
-trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
-trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
+    failed = syncs[~syncs['success']]
+    for _, run in failed.iterrows():
+        st.warning(f'Latest {run["enrollment"]} sync failed on {run["started_at"]:%b %d}: {run["error_message"]}')
 
-domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
-category_color = alt.Color('category:N', title=None, sort=domain,
-                           scale=alt.Scale(domain=domain, range=PALETTE[:len(top)] + [OTHER]),
-                           legend=alt.Legend(orient='bottom', columns=4))
-trends['rank'] = trends['category'].map({c: i for i, c in enumerate(domain)})
-trends_x = month_axis(trends)
+    left, right = st.columns(2)
 
+    with left:
+        st.subheader('MTD Cumulative Spend')
+        mtd = mtd.rename(columns={
+            'this_month': 'This Month', 'prior_year_month': 'Prior Year', 'avg_monthly_spend': '12-mo Avg',
+        }).melt('date', var_name='series', value_name='spend')
+        st.altair_chart(
+            line_chart(mtd, 'date', 'spend', 'series', '%b %d',
+                       {'This Month': PALETTE[0], 'Prior Year': OTHER, '12-mo Avg': PALETTE[1]}),
+            use_container_width=True,
+        )
 
-def stacked_bar(y, y_format, stack):
-    return alt.Chart(trends).mark_bar(stroke='white', strokeWidth=1).encode(
-        x=trends_x,
-        y=alt.Y(f'{y}:Q', title=None, stack=stack, axis=alt.Axis(format=y_format)),
-        color=category_color,
-        order=alt.Order('rank:Q'),
-        tooltip=[alt.Tooltip('label:N', title='Month'), 'category:N',
-                 alt.Tooltip('total:Q', format='$,.0f'), alt.Tooltip('share:Q', format='.0%')],
-    ).properties(height=400)
+    with right:
+        st.subheader('MTD Spend by Category')
+        money_table(categories, {
+            'category_name': 'Category', 'this_month': 'This Month',
+            'last_year_month': 'Prior Year', 'monthly_avg_12mo': '12-mo Avg',
+        }, 'this_month')
 
+    st.subheader('Top Merchants')
+    st.caption('Last 28 days')
+    merchants = query('select merchant, total_spent, transaction_count from top_merchants order by total_spent desc limit 20')
+    merchants = merchants.rename(columns={'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns'})
+    st.dataframe(
+        merchants.style.format({'Total': '${:,.2f}'}),
+        hide_index=True,
+        height=table_height(merchants),
+    )
 
-st.subheader('Monthly Spend by Category')
-st.altair_chart(stacked_bar('total', '$,.0f', 'zero'), use_container_width=True)
+# ---------- Transactions: what's behind the numbers? ----------
+with transactions_tab:
+    txns = query("""
+        select
+            transaction_date,
+            coalesce(merchant, '')                     as merchant,
+            coalesce(description, '')                  as description,
+            coalesce(category_name, 'Uncategorized')   as category,
+            institution || ' · ' || account_name       as account,
+            owner,
+            amount,
+            spend
+        from stg_transactions
+        order by transaction_date desc, transaction_id desc
+    """)
 
-st.subheader('Monthly Spend % by Category')
-st.altair_chart(stacked_bar('total', '.0%', 'normalize'), use_container_width=True)
+    dates_col, search_col, category_col, account_col = st.columns([1.2, 1.5, 1.5, 1.5])
+    month_start = pd.Timestamp(today['date']).replace(day=1).date()
+    dates = dates_col.date_input('Dates', value=(month_start, today['date']), format='MM/DD/YYYY')
+    # While a range is half-picked the widget returns one date; treat it as a single day
+    start, end = (tuple(dates) * 2)[:2]
+    search = search_col.text_input('Search', placeholder='Merchant or description')
+    chosen_categories = category_col.multiselect('Category', sorted(txns['category'].unique()), placeholder='All')
+    chosen_accounts = account_col.multiselect('Account', sorted(txns['account'].unique()), placeholder='All')
+
+    shown = txns[txns['transaction_date'].between(start, end)]
+    if search:
+        shown = shown[shown['merchant'].str.contains(search, case=False, regex=False)
+                      | shown['description'].str.contains(search, case=False, regex=False)]
+    if chosen_categories:
+        shown = shown[shown['category'].isin(chosen_categories)]
+    if chosen_accounts:
+        shown = shown[shown['account'].isin(chosen_accounts)]
+
+    income = shown.loc[shown['category'] == 'Income', 'amount'].sum()
+    st.caption(f'{len(shown):,} transactions · {money(shown["spend"].sum())} spent (net of refunds) · '
+               f'{money(income)} income')
+    st.dataframe(
+        shown,
+        hide_index=True,
+        height=600,
+        column_config={
+            'transaction_date': st.column_config.DateColumn('Date', format='MMM D, YYYY'),
+            'merchant': 'Merchant',
+            'description': 'Description',
+            'category': 'Category',
+            'account': 'Account',
+            'owner': 'Owner',
+            'amount': st.column_config.NumberColumn('Amount', format='dollar'),
+            'spend': None,
+        },
+    )
+
+# ---------- Trends: where is the money going over time? ----------
+with trends_tab:
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader('YTD Cumulative Spend')
+        ytd = query("""
+            select date, year, cumulative_total
+            from daily_cumulative_ytd
+            where category_type = 'expense'
+        """)
+        years = sorted(ytd['year'].unique(), reverse=True)
+        st.altair_chart(
+            line_chart(ytd, 'date', 'cumulative_total', 'year', '%b %d',
+                       dict(zip(years, [PALETTE[0], OTHER] + PALETTE[1:]))),
+            use_container_width=True,
+        )
+
+    with right:
+        st.subheader('YTD Spend by Category')
+        money_table(categories, {'category_name': 'Category', 'this_year': 'This Year', 'last_year': 'Prior Year'},
+                    'this_year')
+
+    trends = query('select month, category_name, total from category_trends')
+    ranked = trends.groupby('category_name')['total'].sum().sort_values(ascending=False).index.tolist()
+    top = ranked[:MAX_CATEGORIES]
+    trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
+    trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
+    trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
+
+    domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
+    category_color = alt.Color('category:N', title=None, sort=domain,
+                               scale=alt.Scale(domain=domain, range=PALETTE[:len(top)] + [OTHER]),
+                               legend=alt.Legend(orient='bottom', columns=4))
+    trends['rank'] = trends['category'].map({c: i for i, c in enumerate(domain)})
+    trends_x = month_axis(trends)
+
+    def stacked_bar(y, y_format, stack):
+        return alt.Chart(trends).mark_bar(stroke='white', strokeWidth=1).encode(
+            x=trends_x,
+            y=alt.Y(f'{y}:Q', title=None, stack=stack, axis=alt.Axis(format=y_format)),
+            color=category_color,
+            order=alt.Order('rank:Q'),
+            tooltip=[alt.Tooltip('label:N', title='Month'), 'category:N',
+                     alt.Tooltip('total:Q', format='$,.0f'), alt.Tooltip('share:Q', format='.0%')],
+        ).properties(height=400)
+
+    st.subheader('Monthly Spend by Category')
+    st.altair_chart(stacked_bar('total', '$,.0f', 'zero'), use_container_width=True)
+
+    st.subheader('Monthly Spend % by Category')
+    st.altair_chart(stacked_bar('total', '.0%', 'normalize'), use_container_width=True)
+
+    st.subheader('Net Cash Flow')
+    cash = query("select month, initcap(category_type) as type, total from monthly_cash_flow")
+    st.altair_chart(
+        alt.Chart(cash).mark_bar(cornerRadius=4).encode(
+            x=month_axis(cash),
+            xOffset='type:N',
+            y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
+            color=alt.Color('type:N', title=None, scale=alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2]),
+                            legend=alt.Legend(orient='bottom')),
+            tooltip=[alt.Tooltip('label:N', title='Month'), 'type:N', alt.Tooltip('total:Q', format='$,.0f')],
+        ).properties(height=400),
+        use_container_width=True,
+    )
 
 # ---------- Glossary ----------
-with st.expander('Category Glossary', expanded=True):
+with glossary_tab:
     st.markdown("""
 | Category | What's included |
 |---|---|
@@ -175,32 +286,3 @@ with st.expander('Category Glossary', expanded=True):
 - Prior Year columns compare the same time period one year ago.
 - The two monthly category charts show the 7 largest categories; the rest are grouped as "Other" (the tables list every category).
 """)
-
-# ---------- Row 5: cash flow + merchants ----------
-left, right = st.columns([2, 1])
-
-with left:
-    st.subheader('Net Cash Flow')
-    cash = query("select month, initcap(category_type) as type, total from monthly_cash_flow")
-    st.altair_chart(
-        alt.Chart(cash).mark_bar(cornerRadius=4).encode(
-            x=month_axis(cash),
-            xOffset='type:N',
-            y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
-            color=alt.Color('type:N', title=None, scale=alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2]),
-                            legend=alt.Legend(orient='bottom')),
-            tooltip=[alt.Tooltip('label:N', title='Month'), 'type:N', alt.Tooltip('total:Q', format='$,.0f')],
-        ).properties(height=400),
-        use_container_width=True,
-    )
-
-with right:
-    st.subheader('Top Merchants')
-    st.caption('Last 28 days')
-    merchants = query('select merchant, total_spent, transaction_count from top_merchants order by total_spent desc limit 20')
-    merchants = merchants.rename(columns={'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns'})
-    st.dataframe(
-        merchants.style.format({'Total': '${:,.2f}'}),
-        hide_index=True,
-        height=table_height(merchants),
-    )
