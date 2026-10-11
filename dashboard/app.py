@@ -36,14 +36,67 @@ def query(sql):
         return pd.read_sql(sql, conn)
 
 
-def line_chart(df, x, y, color, x_format, colors):
-    return alt.Chart(df).mark_line(strokeWidth=2).encode(
+def crosshair(df, x, series, y, y_format, order):
+    # Hover anywhere on the plot: a hairline snaps to the nearest date and one tooltip
+    # lists every series there, so the pointer never has to land on a line
+    wide = df.pivot_table(index=x, columns=series, values=y, aggfunc='sum').reset_index()
+    wide.columns = [str(c) for c in wide.columns]
+    hover = alt.selection_point(fields=[x], nearest=True, on='pointerover', clear='pointerout', empty=False)
+    rule = alt.Chart(wide).mark_rule(color=OTHER).encode(
+        x=f'{x}:T',
+        opacity=alt.condition(hover, alt.value(0.8), alt.value(0)),
+        tooltip=[alt.Tooltip(f'{x}:T', title='Date', format='%b %d, %Y')]
+                + [alt.Tooltip(field=str(s), type='quantitative', format=y_format) for s in order],
+    ).add_params(hover)
+    return hover, rule
+
+
+def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, show_value=False):
+    # Name each series just past the chart's right edge instead of using a legend. Labels
+    # that would overlap are nudged apart (and kept under `top`), each with a dot in its
+    # series color beside it.
+    ends = ends.sort_values(y).copy()
+    label_y, prev = [], None
+    for v in ends[y]:
+        prev = v if prev is None else max(v, prev + gap)
+        label_y.append(prev)
+    if top is not None and label_y[-1] > top:
+        label_y[-1] = top
+        for i in range(len(label_y) - 2, -1, -1):
+            label_y[i] = min(label_y[i], label_y[i + 1] - gap)
+    ends['label_y'] = label_y
+    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {money(v)}') if show_value else '')
+    chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
+    dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=6).encode(
+        y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)))
+    # label text stays neutral; the dot beside it carries the series color
+    text = chart.mark_text(align='left', dx=14, fontSize=12).encode(
+        y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)), text='label_text:N', color=alt.value(OTHER))
+    # no extra padding needed: fitting to the container width already makes room for the text
+    return [dot, text]
+
+
+def line_chart(df, x, y, color, x_format, colors, zero=True):
+    color_scale = alt.Scale(domain=list(colors), range=list(colors.values()))
+    base = alt.Chart(df).encode(
         x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format)),
-        y=alt.Y(f'{y}:Q', title=None, axis=alt.Axis(format='$,.0f')),
-        color=alt.Color(f'{color}:N', title=None, scale=alt.Scale(domain=list(colors), range=list(colors.values())),
-                        legend=alt.Legend(orient='bottom')),
-        tooltip=[alt.Tooltip(f'{x}:T', format=x_format), alt.Tooltip(f'{color}:N'), alt.Tooltip(f'{y}:Q', format='$,.0f')],
+        y=alt.Y(f'{y}:Q', title=None, scale=alt.Scale(zero=zero), axis=alt.Axis(format='$,.0f')),
+        color=alt.Color(f'{color}:N', title=None, scale=color_scale, legend=None),
     )
+    hover, rule = crosshair(df, x, color, y, '$,.0f', colors)
+    points = base.mark_point(filled=True, size=60, opacity=1).encode(
+        opacity=alt.condition(hover, alt.value(1), alt.value(0)))
+    span = df[y].max() - (df[y].min() if not zero else min(df[y].min(), 0))
+    labels = end_labels(df[df[x] == df[x].max()], base.encoding.x, y, color, color_scale, '$,.0f',
+                        gap=span * 0.06, show_value=True)
+    return alt.layer(base.mark_line(strokeWidth=2), points, rule, *labels)
+
+
+def stack_midpoints(df, series, value, rank):
+    # Middle of each series' band in a stacked chart (lowest rank at the bottom)
+    df = df.sort_values(rank).copy()
+    df['mid'] = df[value].cumsum() - df[value] / 2
+    return df
 
 
 def money_table(df, columns, sort_by):
@@ -63,6 +116,11 @@ def money(x, sign=False):
     return f'{prefix}${abs(x):,.0f}'
 
 
+def escape_dollars(text):
+    # Streamlit markdown reads text between two dollar signs as math
+    return text.replace('$', r'\$')
+
+
 def table_height(df):
     # Tall enough to show every row (35px rows + header) so the table never scrolls
     return (len(df) + 1) * 35 + 3
@@ -78,8 +136,8 @@ def month_axis(df):
 st.title('Dough Flow')
 
 categories = query('select * from category_comparison')
-this_month_tab, transactions_tab, trends_tab, glossary_tab = st.tabs(
-    ['This Month', 'Transactions', 'Trends', 'Glossary'])
+this_month_tab, transactions_tab, trends_tab, net_worth_tab, glossary_tab = st.tabs(
+    ['This Month', 'Transactions', 'Trends', 'Net Worth', 'Glossary'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -97,15 +155,16 @@ with this_month_tab:
     spent, typical, worth, synced = st.columns(4)
     spent.metric('Spent this month', money(today['this_month']),
                  delta=f'{money(today["this_month"] - pace, sign=True)} vs usual pace', delta_color='inverse',
-                 help=f'Usual pace by today is {money(pace)}: the 12-mo avg spread evenly across the month', border=True)
+                 help=f'Usual pace by today is {money(pace)}: the 12-mo avg spread evenly across the month', border=True, height='stretch')
     typical.metric('Typical month', money(today['avg_monthly_spend']),
-                   help='Average spend over the last 12 full months', border=True)
+                   help='Average spend over the last 12 full months', border=True, height='stretch')
     worth.metric('Net worth', money(net_worth['total']), help='Latest balance of every active account, minus credit cards',
-                 border=True)
-    if (pd.Timestamp(today['date']) - pd.Timestamp(net_worth['oldest'])).days > 7:
-        worth.caption(f'Some balances last updated {net_worth["oldest"]:%b %d, %Y}')
+                 border=True, height='stretch')
     last_sync = pd.Timestamp(syncs['started_at'].max()).tz_convert('America/Los_Angeles')
-    synced.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', border=True)
+    synced.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', border=True, height='stretch')
+    # Below the row rather than under the tile, so the tiles stay the same height
+    if (pd.Timestamp(today['date']) - pd.Timestamp(net_worth['oldest'])).days > 30:
+        st.caption(f'Net worth includes balances last updated {net_worth["oldest"]:%b %d, %Y} (see Net Worth → Accounts)')
 
     failed = syncs[~syncs['success']]
     for _, run in failed.iterrows():
@@ -176,8 +235,8 @@ with transactions_tab:
         shown = shown[shown['account'].isin(chosen_accounts)]
 
     income = shown.loc[shown['category'] == 'Income', 'amount'].sum()
-    st.caption(f'{len(shown):,} transactions · {money(shown["spend"].sum())} spent (net of refunds) · '
-               f'{money(income)} income')
+    st.caption(escape_dollars(f'{len(shown):,} transactions · {money(shown["spend"].sum())} spent (net of refunds) · '
+                              f'{money(income)} income'))
     st.dataframe(
         shown,
         hide_index=True,
@@ -225,9 +284,9 @@ with trends_tab:
     trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
 
     domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
-    category_color = alt.Color('category:N', title=None, sort=domain,
-                               scale=alt.Scale(domain=domain, range=PALETTE[:len(top)] + [OTHER]),
-                               legend=alt.Legend(orient='bottom', columns=4))
+    category_scale = alt.Scale(domain=domain, range=PALETTE[:len(top)] + [OTHER])
+    category_color = alt.Color('category:N', title=None, sort=domain, scale=category_scale,
+                               legend=alt.Legend(orient='right'))
     trends['rank'] = trends['category'].map({c: i for i, c in enumerate(domain)})
     trends_x = month_axis(trends)
 
@@ -255,11 +314,126 @@ with trends_tab:
             xOffset='type:N',
             y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
             color=alt.Color('type:N', title=None, scale=alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2]),
-                            legend=alt.Legend(orient='bottom')),
+                            legend=alt.Legend(orient='right')),
             tooltip=[alt.Tooltip('label:N', title='Month'), 'type:N', alt.Tooltip('total:Q', format='$,.0f')],
         ).properties(height=400),
         use_container_width=True,
     )
+
+# ---------- Net Worth: how are my assets growing? ----------
+with net_worth_tab:
+    balances = query("""
+        select date, account_id, institution || ' · ' || account_name as account, account_group,
+               is_linked, net_worth_contribution as value, snapshot_date
+        from daily_balances
+    """)
+    balances['date'] = pd.to_datetime(balances['date'])
+    # Start once every bank-linked account has history, so linking one doesn't look like growth.
+    # Hand-entered accounts can begin later; they're left out of growth until they exist (below).
+    start = balances[balances['is_linked']].groupby('account_id')['date'].min().max()
+    balances = balances[balances['date'] >= start]
+
+    daily = balances.groupby('date', as_index=False)['value'].sum()
+    latest_date = daily['date'].max()
+    month_ago_date = max(latest_date - pd.Timedelta(days=30), start)
+    worth_now = daily.loc[daily['date'] == latest_date, 'value'].iloc[0]
+
+    def growth(since):
+        # Only accounts that existed on `since`, so adding an account isn't counted as growth
+        then = balances[balances['date'] == since]
+        now = balances[(balances['date'] == latest_date) & balances['account_id'].isin(then['account_id'])]
+        change = now['value'].sum() - then['value'].sum()
+        return money(change, sign=True), f'{change / then["value"].sum():+.1%}'
+
+    now_col, month_col, start_col = st.columns(3)
+    now_col.metric('Net worth', money(worth_now), border=True, height='stretch')
+    month_change, month_pct = growth(month_ago_date)
+    month_col.metric('Last 30 days', month_change, delta=month_pct, border=True, height='stretch')
+    quarter_change, quarter_pct = growth(max(latest_date - pd.Timedelta(days=90), start))
+    start_col.metric('Last 90 days', quarter_change, delta=quarter_pct, border=True, height='stretch')
+
+    st.subheader('Net Worth')
+    st.altair_chart(
+        line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': PALETTE[0]},
+                   zero=False).properties(height=350),
+        use_container_width=True,
+    )
+
+    groups = ['Cash', 'Investments', 'Retirement']
+    by_group = balances[balances['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
+    by_group['rank'] = by_group['account_group'].map({g: i for i, g in enumerate(groups)})
+    by_group['share'] = by_group['value'] / by_group.groupby('date')['value'].transform('sum')
+    group_scale = alt.Scale(domain=groups, range=PALETTE[:len(groups)])
+    left, right = st.columns(2)
+
+    with left:
+        st.subheader('Assets by Type')
+        st.caption('Credit card balances are subtracted from net worth but not shown here')
+        st.altair_chart(
+            line_chart(by_group, 'date', 'value', 'account_group', '%b %d', dict(zip(groups, PALETTE))),
+            use_container_width=True,
+        )
+
+    with right:
+        st.subheader('Asset Mix')
+        st.caption('Share of total assets by type')
+        mix = alt.Chart(by_group).mark_area(stroke='white', strokeWidth=1).encode(
+            x=alt.X('date:T', title=None, axis=alt.Axis(format='%b %d')),
+            y=alt.Y('value:Q', title=None, stack='normalize', axis=alt.Axis(format='.0%')),
+            color=alt.Color('account_group:N', title=None, sort=groups, scale=group_scale, legend=None),
+            order=alt.Order('rank:Q'),
+        )
+        _, mix_rule = crosshair(by_group, 'date', 'account_group', 'share', '.0%', groups)
+        mix_ends = stack_midpoints(by_group[by_group['date'] == latest_date], 'account_group', 'share', 'rank')
+        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.06, top=1)
+        st.altair_chart(alt.layer(mix, mix_rule, *mix_labels), use_container_width=True)
+
+    st.subheader('Accounts')
+    accounts = balances[balances['date'] == latest_date].merge(
+        balances.loc[balances['date'] == month_ago_date, ['account_id', 'value']].rename(columns={'value': 'value_month_ago'}),
+        on='account_id', how='left',
+    )
+    accounts['change'] = accounts['value'] - accounts['value_month_ago']
+    accounts['group_rank'] = accounts['account_group'].map({g: i for i, g in enumerate(groups + ['Credit Cards'])})
+    accounts['size'] = accounts['value'].abs()
+    accounts = accounts.sort_values(['group_rank', 'size'], ascending=[True, False])
+    updated = pd.to_datetime(accounts['snapshot_date'])
+    accounts['stale'] = updated < latest_date - pd.Timedelta(days=30)
+    accounts['last_updated'] = updated.dt.strftime('%b %d, %Y') + accounts['stale'].map({True: ' (STALE)', False: ''})
+
+    def cents(x):
+        return f"{'-' if x < 0 else ''}${abs(x):,.2f}"
+
+    def signed_cents(x):
+        # text, so a new account shows blank rather than "None"
+        return '' if pd.isna(x) else f"{'+' if x > 0 else ''}{cents(x)}"
+
+    def change_color(v):
+        color = '#30a46c' if v.startswith('+') else '#e5484d' if v.startswith('-') else None
+        return f'color: {color}; text-align: right' if color else 'text-align: right'
+
+    table = accounts[['account', 'account_group', 'value', 'change', 'last_updated']].assign(
+        change=accounts['change'].map(signed_cents))
+    st.dataframe(
+        table.style
+        .format({'value': cents})
+        .map(change_color, subset=['change'])
+        .map(lambda v: 'color: #e5484d' if v.endswith('(STALE)') else '', subset=['last_updated']),
+        hide_index=True,
+        height=table_height(table),
+        column_config={
+            'account': 'Account',
+            'account_group': 'Type',
+            'value': 'Value',
+            'change': '30-day Change',
+            'last_updated': 'Last Updated',
+        },
+    )
+    stale = accounts[accounts['stale']]
+    if len(stale):
+        st.caption(escape_dollars(
+            f'{len(stale)} accounts have no balance in over 30 days and are carried forward at their last value: '
+            f'{money(stale["value"].sum())} in total. Update them with scripts/update_balance.py.'))
 
 # ---------- Glossary ----------
 with glossary_tab:
