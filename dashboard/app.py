@@ -14,6 +14,7 @@ import psycopg2
 import streamlit as st
 
 ICON = str(Path(__file__).parent / 'assets' / 'icon.png')
+DANCING_ICON = str(Path(__file__).parent / 'assets' / 'icon-dancing.gif')
 
 st.set_page_config(page_title='Dough Flow', page_icon=ICON, layout='wide')
 
@@ -53,6 +54,8 @@ st.markdown("""
 }
 /* the tab underline is a separate element that would scroll away; the box-shadow above replaces it */
 [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
+/* breathing room between each tab's last chart/table and the dancing bread */
+[class*="st-key-dancer-"] { margin-top: 3rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -502,3 +505,7 @@ with glossary_tab:
 - Prior Year columns compare the same time period one year ago.
 - The two monthly category charts show the 7 largest categories; the rest are grouped as "Other" (the tables list every category).
 """)
+
+for i, tab in enumerate((net_worth_tab, this_month_tab, transactions_tab, trends_tab, glossary_tab)):
+    with tab, st.container(horizontal_alignment='center', key=f'dancer-{i}'):
+        st.image(DANCING_ICON)
