@@ -1,0 +1,68 @@
+external_category,category_id
+Automotive,5
+BANK_FEES,4
+Bills & Utilities,4
+Business Services-Insurance Services,4
+Business Services-Internet Services,4
+Business Services-Office Supplies,3
+Business Services-Professional Services,4
+Communications-Cable & Internet Comm,4
+Communications-Telephone Comm,4
+Entertainment,7
+ENTERTAINMENT,7
+Entertainment-General Events,7
+Entertainment-Other Entertainment,7
+Fees & Adjustments,4
+Fees & Adjustments-Fees & Adjustments,4
+FOOD_AND_DRINK,2
+Food & Drink,2
+Gas,5
+GENERAL_MERCHANDISE,3
+GENERAL_SERVICES,3
+Gifts & Donations,7
+GOVERNMENT_AND_NON_PROFIT,4
+Groceries,2
+Health & Wellness,29
+Home,8
+HOME_IMPROVEMENT,8
+INCOME,12
+LOAN_DISBURSEMENTS,10
+LOAN_PAYMENTS,10
+MEDICAL,9
+Merchandise & Supplies-Arts & Jewelry,3
+Merchandise & Supplies-Clothing Stores,3
+Merchandise & Supplies-Computer Supplies,3
+Merchandise & Supplies-Department Stores,3
+Merchandise & Supplies-Electronics Stores,3
+Merchandise & Supplies-Florists & Garden,3
+Merchandise & Supplies-Furnishing,3
+Merchandise & Supplies-General Retail,3
+Merchandise & Supplies-Groceries,2
+Merchandise & Supplies-Hardware Supplies,3
+Merchandise & Supplies-Internet Purchase,3
+Merchandise & Supplies-Pharmacies,9
+Merchandise & Supplies-Sporting Goods Stores,3
+Merchandise & Supplies-Wholesale Stores,3
+OTHER,3
+Other-Government Services,4
+Other-Miscellaneous,3
+Personal,9
+PERSONAL_CARE,9
+Professional Services,4
+RENT_AND_UTILITIES,4
+Restaurant-Bar & Café,2
+Restaurant-Restaurant,2
+Shopping,3
+TRANSFER_IN,11
+TRANSFER_OUT,11
+TRANSPORTATION,5
+Transportation-Fuel,5
+Transportation-Parking Charges,5
+Transportation-Rail Services,5
+Transportation-Taxis & Coach,5
+Transportation-Vehicle Leasing & Purchase,5
+Travel,6
+TRAVEL,6
+Travel-Airline,6
+Travel-Lodging,6
+Travel-Travel Agencies,6

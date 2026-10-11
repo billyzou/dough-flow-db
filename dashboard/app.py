@@ -1,7 +1,7 @@
 """
 Dough Flow dashboard.
 
-Reads the dbt marts live from Postgres. Runs as the `streamlit` service in
+Reads the dbt gold models live from Postgres. Runs as the `streamlit` service in
 docker-compose: http://<host>:8501
 """
 
@@ -180,20 +180,20 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.image(ICON, width=60)
     st.title('Dough Flow')
 
-categories = query('select * from category_comparison')
+categories = query('select * from gold.category_comparison')
 net_worth_tab, this_month_tab, transactions_tab, trends_tab, glossary_tab = st.tabs(
     ['Net Worth', 'This Month', 'Transactions', 'Trends', 'Glossary'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
-    mtd = query('select date, this_month, prior_year_month, avg_monthly_spend from daily_cumulative_mtd')
+    mtd = query('select date, this_month, prior_year_month, avg_monthly_spend from gold.daily_cumulative_mtd')
     today = mtd.iloc[-1]
     # 12-mo avg month spread evenly over the days, so "usual pace" by today's date
     pace = today['avg_monthly_spend'] * today['date'].day / pd.Timestamp(today['date']).days_in_month
-    net_worth = query('select sum(net_worth_contribution) as total, min(snapshot_date) as oldest from net_worth').iloc[0]
+    net_worth = query('select sum(net_worth_contribution) as total, min(snapshot_date) as oldest from gold.net_worth').iloc[0]
     syncs = query("""
         select distinct on (enrollment) enrollment, started_at, success, error_message
-        from pipeline_runs
+        from ops.pipeline_runs
         order by enrollment, started_at desc
     """)
 
@@ -237,7 +237,7 @@ with this_month_tab:
 
     st.subheader('Top Merchants')
     st.caption('Last 28 days')
-    merchants = query('select merchant, total_spent, transaction_count from top_merchants order by total_spent desc limit 20')
+    merchants = query('select merchant, total_spent, transaction_count from gold.top_merchants order by total_spent desc limit 20')
     merchants = merchants.rename(columns={'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns'})
     st.dataframe(
         merchants.style.format({'Total': '${:,.2f}'}),
@@ -257,7 +257,7 @@ with transactions_tab:
             owner,
             amount,
             spend
-        from stg_transactions
+        from gold.transactions
         order by transaction_date desc, transaction_id desc
     """)
 
@@ -306,7 +306,7 @@ with trends_tab:
         st.subheader('YTD Cumulative Spend')
         ytd = query("""
             select date, year, cumulative_total
-            from daily_cumulative_ytd
+            from gold.daily_cumulative_ytd
             where category_type = 'expense'
         """)
         years = sorted(ytd['year'].unique(), reverse=True)
@@ -321,7 +321,7 @@ with trends_tab:
         money_table(categories, {'category_name': 'Category', 'this_year': 'This Year', 'last_year': 'Prior Year'},
                     'this_year')
 
-    trends = query('select month, category_name, total from category_trends')
+    trends = query('select month, category_name, total from gold.category_trends')
     ranked = trends.groupby('category_name')['total'].sum().sort_values(ascending=False).index.tolist()
     top = ranked[:MAX_CATEGORIES]
     trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
@@ -352,7 +352,7 @@ with trends_tab:
     st.altair_chart(stacked_bar('total', '.0%', 'normalize'), use_container_width=True)
 
     st.subheader('Net Cash Flow')
-    cash = query("select month, initcap(category_type) as type, total from monthly_cash_flow")
+    cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
     st.altair_chart(
         alt.Chart(cash).mark_bar(cornerRadius=4).encode(
             x=month_axis(cash),
@@ -370,7 +370,7 @@ with net_worth_tab:
     balances = query("""
         select date, account_id, institution || ' · ' || account_name as account, account_group,
                is_linked, net_worth_contribution as value, snapshot_date
-        from daily_balances
+        from gold.daily_balances
     """)
     balances['date'] = pd.to_datetime(balances['date'])
     # Start once every account linked in the initial setup (first 30 days) has history, so that

@@ -3,7 +3,7 @@ select
     category_type,
     sum(amount)                                  as total,
     count(*)                                     as transaction_count
-from {{ ref('stg_transactions') }}
+from {{ ref('transactions') }}
 where category_type in ('income', 'expense')
   and category_name != 'Transfers'
 group by 1, 2

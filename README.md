@@ -17,12 +17,12 @@ Plaid API  (production, 4 banks enrolled)
     │
     ▼
 scripts/ingest_plaid.py   ← Airflow triggers this daily at 10am UTC
-    │  psycopg2 upsert on external_transaction_id
+    │  raw JSON payloads, append-only
     ▼
 PostgreSQL 14  (dough_flow_db)
     │
     ▼
-dbt  (staging views → mart views)
+dbt  (bronze → silver facts/dims → gold aggregates)
     │
     ▼
 Streamlit  (self-hosted, spending dashboard)
@@ -47,33 +47,34 @@ Everything runs in Docker Compose on a home Ubuntu server.
                     │  INGESTION  (Airflow · daily 10am UTC)           │
                     │                                                  │
                     │  ingest_plaid.py                                 │
-                    │  · idempotent upsert (dedup on ext. ID)          │
-                    │  · late-arriving data handled (skip pending)     │
-                    │  · audit log → pipeline_runs                     │
-                    │                                                  │
-                    │  categorize.py                                   │
-                    │  · label enrichment via category_map             │
+                    │  · raw Plaid JSON, new row only if it changed    │
+                    │  · audit log → ops.pipeline_runs                 │
+                    │  delete_transactions.py                          │
+                    │  · purges private transactions from bronze       │
                     └──────────────────────────────┬──────────────────┘
                                                    │
                     ┌──────────────────────────────▼──────────────────┐
-                    │  LOAD  (PostgreSQL · dough_flow_db)              │
+                    │  BRONZE  (raw, as it arrived)                    │
                     │                                                  │
-                    │  accounts          account_balances              │
-                    │  transactions      pipeline_runs (observability) │
-                    │  categories                                      │
-                    │  category_map                                    │
+                    │  plaid_transactions   plaid_accounts             │
+                    │  manual_balances      accounts (registry)        │
+                    │  category_overrides   categories, category_map   │
+                    │  legacy_transactions  legacy_account_balances    │
                     └──────────────────────────────┬──────────────────┘
                                                    │
                     ┌──────────────────────────────▼──────────────────┐
-                    │  TRANSFORM  (dbt · orchestrated by Airflow)      │
+                    │  SILVER  (dbt tables · cleaned and conformed)    │
                     │                                                  │
-                    │  staging/          · type casting                │
-                    │  └── stg_transactions  · field rename            │
+                    │  stg_*  one view per bronze source               │
+                    │  fct_transactions      fct_account_balances      │
+                    │  dim_account           dim_category              │
+                    └──────────────────────────────┬──────────────────┘
+                                                   │
+                    ┌──────────────────────────────▼──────────────────┐
+                    │  GOLD  (dbt views · dashboard-ready)             │
                     │                                                  │
-                    │  marts/            · analysis-ready aggregates   │
-                    │  ├── monthly_spending                            │
-                    │  ├── category_trends                             │
-                    │  └── net_worth                                   │
+                    │  transactions, monthly_spending, category_trends │
+                    │  daily_balances, net_worth, ...                  │
                     └──────────────────────────────┬──────────────────┘
                                                    │
                     ┌──────────────────────────────▼──────────────────┐
@@ -104,26 +105,25 @@ Everything runs in Docker Compose on a home Ubuntu server.
 
 ## Schema
 
-| Table | Description |
+Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and ops; dbt builds the rest.
+
+| Schema | Contents |
 |---|---|
-| `accounts` | Bank accounts, credit cards, investment accounts |
-| `transactions` | Individual transactions; source of truth for all analysis |
-| `account_balances` | Point-in-time balance snapshots per account |
-| `categories` | Hierarchical income/expense taxonomy (supports sub-categories) |
-| `category_map` | Maps Plaid's Personal Finance Category labels to local categories |
-| `pipeline_runs` | Observability: rows fetched/inserted/errors/runtime per DAG run |
+| `bronze` | Raw data as it arrived: Plaid transaction and account payloads (JSON), hand-entered balances, the account registry, category overrides, the category seeds, and frozen copies of the pre-medallion tables (the only source for the 2025 CSV backfill) |
+| `silver` | `stg_*` cleaning views, then `fct_transactions` (one row per posted transaction), `fct_account_balances` (one row per account per snapshot day), `dim_account`, `dim_category` |
+| `gold` | Dashboard-ready models: `transactions` (facts joined to dims) and the aggregates built on it |
+| `ops` | `pipeline_runs`: rows fetched/inserted/errors/runtime per enrollment per run |
 
 ---
 
 ## Key design decisions
 
-- **Idempotent upserts** — transactions insert on `external_transaction_id` with `DO NOTHING` on conflict. Re-running the DAG never creates duplicates.
-- **Skip pending transactions** — Plaid surfaces pending transactions before they post. Skipping them avoids ghost records that get amended or cancelled.
-- **ELT, not ETL** — ingest stores raw Plaid data (including `external_category`, `merchant`, `transaction_type`). Category mapping runs separately via `categorize.py` and dbt. Clean separation between extract and transform.
-- **Amount sign normalization at ingest** — Plaid uses positive = money out across all account types. We flip once on insert (`amount = -t['amount']`), so negative = expense and positive = income throughout the DB.
+- **Raw, append-only bronze** — ingest stores each Plaid payload untouched, keyed on (transaction id, payload hash). Re-running the DAG adds nothing unless Plaid changed a transaction, and every rule below can be replayed over history.
+- **All cleaning in dbt** — the sign flip (Plaid: positive = money out; ours: negative = expense), dropping pending transactions, Plaid's later corrections winning, and categorization (`category_overrides`, then `category_map`) all live in silver.
+- **Legacy as a source** — the CSV files behind the 2025 backfill are gone, so the pre-medallion tables were frozen into `bronze.legacy_*`. Silver uses them only where Plaid has nothing.
 - **Observability table** — every DAG run writes a row to `pipeline_runs` with row counts, error messages, and runtime. No external monitoring needed at this scale.
 - **Plaid over alternatives** — evaluated Teller (no SOC2, small company risk) and direct scraping. Plaid is SOC2 Type II + ISO 27001; Chase and Wealthfront use OAuth so no credentials are handed over.
-- **dbt views, not tables** — all dbt models materialize as views. The dataset is small (<2,000 transactions) so there's no performance argument for tables, and views stay current automatically.
+- **Silver tables, gold views** — silver facts and dims are rebuilt by each dbt run; gold views stay cheap at this size. `update_balance.py` rebuilds the balance models itself so hand-entered balances show right away.
 
 ---
 
@@ -131,23 +131,25 @@ Everything runs in Docker Compose on a home Ubuntu server.
 
 ```
 ├── dashboard/
-│   └── app.py                # Streamlit dashboard (reads dbt marts live)
+│   └── app.py                # Streamlit dashboard (reads gold live)
 ├── dags/
 │   ├── ingest_plaid.py       # Airflow DAG: daily ingest
-│   └── dbt_run.py            # dbt run (manual)
+│   └── dbt_run.py            # dbt seed + run, after the ingest DAG
 ├── dough_flow_db/            # dbt project
+│   ├── seeds/                # categories, category_map (→ bronze)
 │   └── models/
-│       ├── staging/          # stg_transactions (view)
-│       └── marts/            # monthly_spending, category_trends, net_worth (views)
+│       ├── staging/          # stg_* views over bronze (→ silver)
+│       ├── silver/           # facts and dims (tables)
+│       └── gold/             # dashboard models (views)
 ├── scripts/
-│   ├── ingest_plaid.py       # Plaid → Postgres ingest
-│   ├── categorize.py         # Backfills category_id from category_map
+│   ├── ingest_plaid.py       # Plaid → bronze ingest
+│   ├── update_balance.py     # Hand-entered balances → bronze
 │   ├── plaid_create_link_token.py
 │   ├── plaid_exchange_public_token.py
 │   └── plaid_link.html       # Browser UI for Plaid Link enrollment
 ├── sql/
-│   ├── schema.sql            # Table definitions, indexes, triggers
-│   └── categories_seed.sql   # Category taxonomy + Plaid PFC mappings
+│   ├── schema.sql            # bronze and ops tables
+│   └── migrations/           # One-time moves between layouts
 ├── docker-compose.yml        # Full stack: postgres, airflow, streamlit
 ├── Dockerfile                # Airflow image + requirements
 ├── Dockerfile.streamlit      # Streamlit image + psycopg2-binary

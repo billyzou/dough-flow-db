@@ -3,7 +3,7 @@ select
     category_name,
     sum(spend)                                   as total,
     count(*)                                     as transaction_count
-from {{ ref('stg_transactions') }}
+from {{ ref('transactions') }}
 where
     spend is not null
     and transaction_date >= date_trunc('month', current_date - interval '11 months')

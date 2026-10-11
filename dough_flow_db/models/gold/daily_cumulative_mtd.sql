@@ -11,7 +11,7 @@ current_daily as (
     select
         transaction_date                          as date,
         sum(spend)                          as daily_total
-    from {{ ref('stg_transactions') }}
+    from {{ ref('transactions') }}
     where
         spend is not null
         and transaction_date >= date_trunc('month', current_date)
@@ -23,7 +23,7 @@ prior_daily as (
     select
         (transaction_date + interval '1 year')::date as date,
         sum(spend)                              as daily_total
-    from {{ ref('stg_transactions') }}
+    from {{ ref('transactions') }}
     where
         spend is not null
         and transaction_date >= date_trunc('month', current_date - interval '1 year')
@@ -34,7 +34,7 @@ prior_daily as (
 -- avg monthly expense over last 12 fully completed calendar months
 avg_monthly as (
     select sum(spend) / 12.0 as avg_monthly_spend
-    from {{ ref('stg_transactions') }}
+    from {{ ref('transactions') }}
     where
         spend is not null
         and transaction_date >= date_trunc('month', current_date - interval '12 months')

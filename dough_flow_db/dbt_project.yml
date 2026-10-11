@@ -33,7 +33,17 @@ clean-targets:         # directories to be removed by `dbt clean`
 # files using the `{{ config(...) }}` macro.
 models:
   dough_flow_db:
+    # staging: one cleaned view per bronze source; silver: facts and dims; gold: dashboard-ready
     staging:
+      +schema: silver
       +materialized: view
-    marts:
+    silver:
+      +schema: silver
+      +materialized: table
+    gold:
+      +schema: gold
       +materialized: view
+
+seeds:
+  dough_flow_db:
+    +schema: bronze

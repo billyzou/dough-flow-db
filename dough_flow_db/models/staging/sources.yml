@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: Raw data as it arrived. Written by scripts/, defined in sql/schema.sql.
+    schema: bronze
+    tables:
+      - name: accounts
+        description: Account registry; account_id is the key all layers join on.
+      - name: plaid_transactions
+        description: Plaid transaction payloads; a new row each time a payload changes.
+      - name: plaid_accounts
+        description: Plaid account payloads with balances, one row per account per ingest run.
+      - name: manual_balances
+        description: Hand-entered balance snapshots (update_balance.py).
+      - name: category_overrides
+        description: Hand-picked categories that win over category_map.
+      - name: legacy_transactions
+        description: Frozen copy of the pre-medallion transactions table, incl. the 2025 CSV backfill.
+      - name: legacy_account_balances
+        description: Frozen copy of the pre-medallion account_balances table.

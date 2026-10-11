@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: dim_account
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+      - name: account_type
+        tests:
+          - not_null
+
+  - name: dim_category
+    columns:
+      - name: category_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_transactions
+    columns:
+      - name: transaction_id
+        tests:
+          - unique
+          - not_null
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_account')
+                field: account_id
+      - name: category_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_category')
+                field: category_id
+      - name: amount
+        tests:
+          - not_null
+      - name: transaction_date
+        tests:
+          - not_null
+
+  - name: fct_account_balances
+    columns:
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_account')
+                field: account_id
