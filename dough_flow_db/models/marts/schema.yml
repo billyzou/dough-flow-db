@@ -49,6 +49,18 @@ models:
         tests:
           - not_null
 
+  - name: daily_balances
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: account_group
+        tests:
+          - not_null
+      - name: balance
+        tests:
+          - not_null
+
   - name: net_worth
     columns:
       - name: account_id
