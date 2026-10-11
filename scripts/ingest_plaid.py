@@ -127,7 +127,7 @@ def upsert_accounts(conn, accounts, institution_name):
         INSERT INTO accounts (external_account_id, name, type, institution, currency, balance)
         VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (external_account_id) DO UPDATE SET
-            name        = EXCLUDED.name,
+            -- name is kept: hand-entered accounts later linked to Plaid keep their names
             type        = EXCLUDED.type,
             institution = EXCLUDED.institution,
             currency    = EXCLUDED.currency,
