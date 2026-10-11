@@ -1,7 +1,14 @@
 version: 2
 
 models:
-  - name: stg_transactions
+  - name: stg_accounts
+    columns:
+      - name: account_id
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_plaid__transactions
     columns:
       - name: transaction_id
         tests:
@@ -10,9 +17,10 @@ models:
       - name: amount
         tests:
           - not_null
-      - name: transaction_date
+
+  - name: stg_legacy__transactions
+    columns:
+      - name: transaction_id
         tests:
-          - not_null
-      - name: account_id
-        tests:
+          - unique
           - not_null

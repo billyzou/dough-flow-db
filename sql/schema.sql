@@ -1,96 +1,111 @@
 -- ============================================================
--- Personal Finance Database Schema
+-- Personal Finance Database Schema (medallion)
 -- PostgreSQL
+--
+-- bronze  raw data as it arrived, written by scripts/ (this file)
+-- silver  cleaned facts and dims, built by dbt (dough_flow_db/models/silver)
+-- gold    dashboard-ready aggregates, built by dbt (dough_flow_db/models/gold)
+-- ops     pipeline metadata
+--
+-- Categories and the Plaid category map are dbt seeds (dough_flow_db/seeds), loaded into bronze.
 -- ============================================================
 
-CREATE TABLE IF NOT EXISTS accounts (
-    account_id       SERIAL PRIMARY KEY,
+CREATE SCHEMA IF NOT EXISTS bronze;
+CREATE SCHEMA IF NOT EXISTS ops;
+
+-- Every account we track. account_id is the key all layers join on.
+-- Plaid-linked accounts are registered by ingest_plaid.py the first time they're seen;
+-- hand-entered accounts (no Plaid link) are added by hand. type and institution are only
+-- needed for hand-entered accounts: linked accounts take them from Plaid in silver.
+CREATE TABLE IF NOT EXISTS bronze.accounts (
+    account_id          SERIAL PRIMARY KEY,
     external_account_id VARCHAR(100) UNIQUE,
-    name             VARCHAR(100) NOT NULL,
-    type             VARCHAR(50)  NOT NULL CHECK (type IN ('checking', 'savings', 'credit', 'investment', 'cash')),
-    institution      VARCHAR(100),
-    currency         CHAR(3)      NOT NULL DEFAULT 'USD',
-    balance          NUMERIC(15, 2) NOT NULL DEFAULT 0.00,
-    owner            VARCHAR(20)  CHECK (owner IN ('husband', 'wife')),
-    is_active        BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    name                VARCHAR(100) NOT NULL,
+    type                VARCHAR(50)  CHECK (type IN ('checking', 'savings', 'credit', 'investment', 'cash')),
+    institution         VARCHAR(100),
+    currency            CHAR(3)      NOT NULL DEFAULT 'USD',
+    owner               VARCHAR(20)  CHECK (owner IN ('husband', 'wife')),
+    is_active           BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS categories (
-    category_id   SERIAL PRIMARY KEY,
-    name          VARCHAR(100) NOT NULL UNIQUE,
-    parent_id     INT REFERENCES categories(category_id) ON DELETE SET NULL,
-    type          VARCHAR(10)  NOT NULL CHECK (type IN ('income', 'expense')),
-    color         CHAR(7),
-    created_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+-- Plaid /transactions/get rows, untouched. A transaction gets a new row only when its
+-- payload changes, so this is the full history of what Plaid told us.
+CREATE TABLE IF NOT EXISTS bronze.plaid_transactions (
+    plaid_transaction_id VARCHAR(100) NOT NULL,
+    payload_hash         CHAR(32)     NOT NULL,
+    enrollment           VARCHAR(150) NOT NULL,
+    payload              JSONB        NOT NULL,
+    loaded_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (plaid_transaction_id, payload_hash)
 );
 
-CREATE TABLE IF NOT EXISTS category_map (
-    external_category VARCHAR(150) PRIMARY KEY,
-    category_id       INT NOT NULL REFERENCES categories(category_id) ON DELETE RESTRICT,
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- Plaid account payloads (including balances), one row per account per ingest run.
+CREATE TABLE IF NOT EXISTS bronze.plaid_accounts (
+    load_id          BIGSERIAL    PRIMARY KEY,
+    enrollment       VARCHAR(150) NOT NULL,
+    institution_name VARCHAR(100),
+    plaid_account_id VARCHAR(100) NOT NULL,
+    payload          JSONB        NOT NULL,
+    loaded_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS transactions (
-    transaction_id           SERIAL PRIMARY KEY,
-    account_id               INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    category_id              INT          REFERENCES categories(category_id) ON DELETE SET NULL,
-    external_transaction_id  VARCHAR(100) UNIQUE,
+-- Hand-entered balance snapshots (scripts/update_balance.py). Append-only: re-entering a
+-- date adds a row and silver keeps the latest.
+CREATE TABLE IF NOT EXISTS bronze.manual_balances (
+    account_id    INT            NOT NULL REFERENCES bronze.accounts(account_id) ON DELETE CASCADE,
+    snapshot_date DATE           NOT NULL,
+    balance       NUMERIC(15, 2) NOT NULL,
+    entered_at    TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+-- Hand-picked categories that win over the category_map seed. transaction_id is the
+-- source's id (Plaid transaction_id, or csv_<hash> for the CSV backfill).
+CREATE TABLE IF NOT EXISTS bronze.category_overrides (
+    transaction_id VARCHAR(100) PRIMARY KEY,
+    category_id    INT          NOT NULL,
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- Frozen copies of the pre-medallion tables (2026-10-11). They're the only source for
+-- the 2025 CSV backfill and for balances older than the Plaid payloads in bronze.
+-- Nothing writes to them except scripts/delete_transactions.py.
+CREATE TABLE IF NOT EXISTS bronze.legacy_transactions (
+    transaction_id           INT            PRIMARY KEY,
+    account_id               INT            NOT NULL,
+    category_id              INT,
+    external_transaction_id  VARCHAR(100)   UNIQUE,
     external_category        VARCHAR(150),
     transaction_type         VARCHAR(30),
     amount                   NUMERIC(15, 2) NOT NULL,
     description              TEXT,
     merchant                 VARCHAR(150),
-    status                   VARCHAR(10)  NOT NULL DEFAULT 'posted' CHECK (status IN ('posted', 'pending')),
-    transaction_date         DATE         NOT NULL,
+    status                   VARCHAR(10)    NOT NULL,
+    transaction_date         DATE           NOT NULL,
     posted_date              DATE,
-    is_recurring             BOOLEAN      NOT NULL DEFAULT FALSE,
+    is_recurring             BOOLEAN        NOT NULL,
     notes                    TEXT,
-    created_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    updated_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    created_at               TIMESTAMPTZ    NOT NULL,
+    updated_at               TIMESTAMPTZ    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_transactions_account_id  ON transactions(account_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_category_id ON transactions(category_id);
-CREATE INDEX IF NOT EXISTS idx_transactions_date        ON transactions(transaction_date);
-
-CREATE OR REPLACE FUNCTION update_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN 
-    NEW.updated_at = NOW(); 
-    RETURN NEW; 
-    END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER trg_accounts_updated_at
-    BEFORE UPDATE ON accounts 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at();
-
-CREATE OR REPLACE TRIGGER trg_transactions_updated_at
-    BEFORE UPDATE ON transactions 
-    FOR EACH ROW 
-    EXECUTE FUNCTION update_updated_at();
-
-
-CREATE TABLE IF NOT EXISTS account_balances (
-    balance_id    SERIAL PRIMARY KEY,
-    account_id    INT          NOT NULL REFERENCES accounts(account_id) ON DELETE CASCADE,
-    snapshot_date DATE         NOT NULL,
-    currency      CHAR(3)      NOT NULL DEFAULT 'USD',
+CREATE TABLE IF NOT EXISTS bronze.legacy_account_balances (
+    balance_id    INT            PRIMARY KEY,
+    account_id    INT            NOT NULL,
+    snapshot_date DATE           NOT NULL,
+    currency      CHAR(3)        NOT NULL,
     balance       NUMERIC(15, 2) NOT NULL,
     UNIQUE (account_id, snapshot_date)
 );
 
-CREATE TABLE IF NOT EXISTS pipeline_runs (
+CREATE TABLE IF NOT EXISTS ops.pipeline_runs (
     run_id        SERIAL PRIMARY KEY,
     enrollment    VARCHAR(150),
     started_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     finished_at   TIMESTAMPTZ,
     success       BOOLEAN      NOT NULL,
-    error_message TEXT, 
-    rows_seen     INT,  
+    error_message TEXT,
+    rows_seen     INT,
     rows_inserted INT,
     rows_skipped  INT
 );

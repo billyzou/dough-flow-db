@@ -2,14 +2,13 @@
 """
 ingest_plaid.py
 
-Pulls accounts and transactions from Plaid and upserts them into Postgres.
-Categorization is a separate step — run scripts/categorize.py after this.
-
-Sign convention (matches CLAUDE.md): negative = expense, positive = income.
-Plaid normalizes amount sign across account types (positive = money out from
-the user's perspective), so we flip once on insert regardless of account type.
+Pulls accounts and transactions from Plaid and lands them in bronze as raw JSON.
+Cleaning (sign flip, pending filter, categories) happens in dbt, not here.
+New Plaid accounts are also registered in bronze.accounts so they get an account_id.
 """
 
+import hashlib
+import json
 import logging
 import os
 from datetime import date, timedelta, datetime
@@ -70,16 +69,6 @@ def build_db_conn():
     )
 
 
-def map_account_type(plaid_type, plaid_subtype):
-    if plaid_type == 'depository':
-        return 'checking' if plaid_subtype == 'checking' else 'savings'
-    if plaid_type == 'credit':
-        return 'credit'
-    if plaid_type == 'investment':
-        return 'investment'
-    return 'cash'
-
-
 def fetch_institution_name(client, access_token):
     item = client.item_get(ItemGetRequest(access_token=access_token))['item']
     inst_id = item['institution_id']
@@ -121,98 +110,55 @@ def fetch_transactions(client, access_token, start_date, end_date):
     return accounts, all_txns
 
 
-def upsert_accounts(conn, accounts, institution_name):
-    """Upsert accounts; return {external_account_id: (account_id, type)} for the transaction step."""
-    sql = """
-        INSERT INTO accounts (external_account_id, name, type, institution, currency, balance)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (external_account_id) DO UPDATE SET
-            -- name is kept: hand-entered accounts later linked to Plaid keep their names
-            type        = EXCLUDED.type,
-            institution = EXCLUDED.institution,
-            currency    = EXCLUDED.currency,
-            balance     = EXCLUDED.balance
-        RETURNING account_id, external_account_id, type
-    """
-    lookup = {}
+def to_json(plaid_model):
+    # sort_keys so an unchanged payload always hashes the same
+    return json.dumps(plaid_model.to_dict(), sort_keys=True, default=str)
+
+
+def land_accounts(conn, label, accounts, institution_name):
+    """Register new accounts and store each account's payload (balances included)."""
     with conn.cursor() as cur:
         for acct in accounts:
-            a = acct.to_dict()
-            balances = a.get('balances') or {}
-            cur.execute(sql, (
-                a['account_id'],
-                a['name'],
-                map_account_type(str(a.get('type', '')), str(a.get('subtype', '') or '')),
-                institution_name,
-                balances.get('iso_currency_code') or 'USD',
-                balances.get('current') or 0,
-            ))
-            account_id, ext_id, typ = cur.fetchone()
-            lookup[ext_id] = (account_id, typ)
-            log.info(f"  Upserted account {a['name']} (local id={account_id}, type={typ})")
-
+            # name is only set on first sight: hand-entered accounts later linked to Plaid keep theirs
             cur.execute("""
-                INSERT INTO account_balances (account_id, snapshot_date, currency, balance)
+                INSERT INTO bronze.accounts (external_account_id, name)
+                VALUES (%s, %s)
+                ON CONFLICT (external_account_id) DO NOTHING
+            """, (acct['account_id'], acct['name']))
+            cur.execute("""
+                INSERT INTO bronze.plaid_accounts (enrollment, institution_name, plaid_account_id, payload)
                 VALUES (%s, %s, %s, %s)
-                ON CONFLICT (account_id, snapshot_date) DO UPDATE SET balance = EXCLUDED.balance
-            """, (
-                account_id,
-                date.today(),
-                balances.get('iso_currency_code') or 'USD',
-                balances.get('current') or 0,
-            ))
+            """, (label, institution_name, acct['account_id'], to_json(acct)))
 
     conn.commit()
-    log.info(f"  Accounts upserted: {len(lookup)}")
-    return lookup
+    log.info(f"  Accounts landed: {len(accounts)}")
 
 
-def upsert_transactions(conn, transactions, account_lookup):
-    """Insert posted transactions; skip pending; flip Plaid's sign convention."""
+def land_transactions(conn, label, transactions):
+    """Store each transaction's payload, pending ones included. Unchanged payloads are skipped."""
     sql = """
-        INSERT INTO transactions (
-            external_transaction_id, account_id, external_category, transaction_type,
-            amount, description, merchant, status, transaction_date, posted_date
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (external_transaction_id) DO NOTHING
+        INSERT INTO bronze.plaid_transactions (plaid_transaction_id, payload_hash, enrollment, payload)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (plaid_transaction_id, payload_hash) DO NOTHING
     """
-    seen = inserted = skipped_pending = skipped_no_account = 0
+    seen = inserted = 0
 
     with conn.cursor() as cur:
         for txn in transactions:
-            t = txn.to_dict()
-            seen += 1
-
-            if t.get('pending'):
-                skipped_pending += 1
-                continue
-
-            entry = account_lookup.get(t['account_id'])
-            if entry is None:
-                skipped_no_account += 1
-                log.warning(f"  No local account for {t['account_id']}, skipping {t['transaction_id']}")
-                continue
-            local_account_id, _ = entry
-
-            pfc = t.get('personal_finance_category') or {}
+            payload = to_json(txn)
             cur.execute(sql, (
-                t['transaction_id'],
-                local_account_id,
-                pfc.get('primary'),
-                t.get('transaction_type'),
-                -t['amount'],
-                t.get('name'),
-                t.get('merchant_name'),
-                'posted',
-                t.get('authorized_date') or t['date'],
-                t['date'],
+                txn['transaction_id'],
+                hashlib.md5(payload.encode()).hexdigest(),
+                label,
+                payload,
             ))
+            seen += 1
             inserted += cur.rowcount
 
     conn.commit()
-    log.info(f"  Transactions seen: {seen}, inserted: {inserted}, skipped pending: {skipped_pending}, skipped no account: {skipped_no_account}")
-    return seen, inserted, skipped_pending
+    unchanged = seen - inserted
+    log.info(f"  Transactions seen: {seen}, new or changed: {inserted}, unchanged: {unchanged}")
+    return seen, inserted, unchanged
 
 
 def ingest_enrollment(conn, client, label, token, start_date, end_date):
@@ -221,14 +167,14 @@ def ingest_enrollment(conn, client, label, token, start_date, end_date):
     log.info(f"[{label}] Institution: {institution_name}")
     accounts, transactions = fetch_transactions(client, token, start_date, end_date)
     log.info(f"[{label}] Fetched {len(accounts)} accounts, {len(transactions)} transactions")
-    account_lookup = upsert_accounts(conn, accounts, institution_name)
-    return upsert_transactions(conn, transactions, account_lookup)
+    land_accounts(conn, label, accounts, institution_name)
+    return land_transactions(conn, label, transactions)
 
 
 def insert_pipeline_runs(conn, enrollment, started_at, finished_at, success, error_message, rows_seen, rows_inserted, rows_skipped):
-    """Insert pipeline runs"""
+    """Insert pipeline runs. rows_skipped = transactions already in bronze unchanged."""
     sql = """
-        INSERT INTO pipeline_runs (
+        INSERT INTO ops.pipeline_runs (
             enrollment, started_at, finished_at, success, error_message, rows_seen, rows_inserted, rows_skipped
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -293,7 +239,7 @@ def main():
 
     log.info(
         f"=== Plaid ingest complete: seen={grand_seen}, inserted={grand_inserted}, "
-        f"skipped_pending={grand_skipped}, failed_enrollments={failures or 'none'} ==="
+        f"unchanged={grand_skipped}, failed_enrollments={failures or 'none'} ==="
     )
     return 1 if failures else 0
 

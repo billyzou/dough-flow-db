@@ -4,7 +4,7 @@
 -- jump on the update day. Days after the latest snapshot carry it forward.
 with first_snapshots as (
     select account_id, min(snapshot_date) as first_date
-    from account_balances
+    from {{ ref('fct_account_balances') }}
     group by 1
 ),
 
@@ -25,7 +25,7 @@ grouped as (
         count(b.balance) over (partition by s.account_id order by s.date)      as prev_grp,
         count(b.balance) over (partition by s.account_id order by s.date desc) as next_grp
     from spine s
-    left join account_balances b
+    left join {{ ref('fct_account_balances') }} b
         on b.account_id = s.account_id
        and b.snapshot_date = s.date
 ),
@@ -58,24 +58,23 @@ filled as (
 select
     f.date,
     a.account_id,
-    a.name                    as account_name,
+    a.account_name,
     a.institution,
-    a.type                    as account_type,
+    a.account_type,
     case
-        when a.type in ('checking', 'savings', 'cash') then 'Cash'
-        when a.name ~* '\m(401k|ira)\M' then 'Retirement'
-        when a.type = 'investment' then 'Investments'
-        when a.type = 'credit' then 'Credit Cards'
+        when a.account_type in ('checking', 'savings', 'cash') then 'Cash'
+        when a.account_name ~* '\m(401k|ira)\M' then 'Retirement'
+        when a.account_type = 'investment' then 'Investments'
+        when a.account_type = 'credit' then 'Credit Cards'
     end                       as account_group,
-    -- linked through Plaid (daily snapshots) vs entered by hand
-    a.external_account_id is not null as is_linked,
+    a.is_linked,
     round(f.balance, 2)       as balance,
     -- liabilities subtract from net worth
-    case a.type
+    case a.account_type
         when 'credit' then -round(f.balance, 2)
         else round(f.balance, 2)
     end                       as net_worth_contribution,
     f.snapshot_date
 from filled f
-join accounts a using (account_id)
+join {{ ref('dim_account') }} a using (account_id)
 where a.is_active

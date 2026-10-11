@@ -2,7 +2,7 @@ select
     merchant,
     -sum(amount)  as total_spent,
     count(*)      as transaction_count
-from {{ ref('stg_transactions') }}
+from {{ ref('transactions') }}
 where category_type = 'expense'
   and merchant is not null
   and category_name != 'Transfers'

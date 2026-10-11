@@ -1,11 +1,11 @@
 -- Category spend comparison: MTD, prior year same month, YTD, prior YTD, 12-mo avg
--- One row per category. Spend is net of refunds (see stg_transactions.spend).
+-- One row per category. Spend is net of refunds (see fct_transactions.spend).
 with base as (
     select
         category_name,
         transaction_date,
         spend                                     as amount
-    from {{ ref('stg_transactions') }}
+    from {{ ref('transactions') }}
     where spend is not null
 ),
 

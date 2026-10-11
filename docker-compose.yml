@@ -32,7 +32,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/docker-init/01_airflow_meta.sql:/docker-entrypoint-initdb.d/01_airflow_meta.sql
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/03_schema.sql
-      - ./sql/categories_seed.sql:/docker-entrypoint-initdb.d/04_categories_seed.sql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${DB_USER}", "-d", "${DB_NAME}"]
       interval: 5s

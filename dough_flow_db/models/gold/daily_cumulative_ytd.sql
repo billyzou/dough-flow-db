@@ -3,7 +3,7 @@ with daily as (
         transaction_date                          as date,
         category_type,
         sum(case category_type when 'income' then amount else spend end) as daily_total
-    from {{ ref('stg_transactions') }}
+    from {{ ref('transactions') }}
     where
         (category_type = 'income' or spend is not null)
         and transaction_date >= date_trunc('year', current_date - interval '1 year')

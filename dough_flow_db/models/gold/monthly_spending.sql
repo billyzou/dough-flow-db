@@ -4,7 +4,7 @@ select
     category_type,
     sum(spend)                                   as total,
     count(*)                                     as transaction_count
-from {{ ref('stg_transactions') }}
+from {{ ref('transactions') }}
 where spend is not null
 group by 1, 2, 3
 order by 1 desc, total asc
