@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="dashboard/assets/icon.svg" alt="dough-flow-db icon" width="160">
+</p>
+
 # dough-flow-db
 
 A self-hosted personal finance pipeline. Real bank transactions pulled daily from Plaid, stored in PostgreSQL, transformed with dbt, and visualized in a Streamlit dashboard — all orchestrated by Airflow running on a home server.
