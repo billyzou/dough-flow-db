@@ -10,6 +10,7 @@ with plaid as (
         t.description,
         t.merchant,
         t.external_category,
+        t.external_category_detailed,
         t.transaction_type,
         'plaid'  as source
     from {{ ref('stg_plaid__transactions') }} t
@@ -27,6 +28,7 @@ legacy as (
         description,
         merchant,
         external_category,
+        null     as external_category_detailed,
         transaction_type,
         'legacy' as source
     from {{ ref('stg_legacy__transactions') }} l
@@ -43,7 +45,7 @@ unioned as (
 select
     u.transaction_id,
     u.account_id,
-    coalesce(o.category_id, m.category_id)  as category_id,
+    coalesce(o.category_id, md.category_id, m.category_id) as category_id,
     u.transaction_date,
     u.posted_date,
     u.amount,
@@ -58,5 +60,7 @@ select
     u.source
 from unioned u
 left join {{ ref('stg_category_overrides') }} o using (transaction_id)
-left join {{ ref('category_map') }} m using (external_category)
-left join {{ ref('dim_category') }} c on c.category_id = coalesce(o.category_id, m.category_id)
+-- a detailed label (e.g. gyms within PERSONAL_CARE) wins over the primary one
+left join {{ ref('category_map') }} md on md.external_category = u.external_category_detailed
+left join {{ ref('category_map') }} m on m.external_category = u.external_category
+left join {{ ref('dim_category') }} c on c.category_id = coalesce(o.category_id, md.category_id, m.category_id)
