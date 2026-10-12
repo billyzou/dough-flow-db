@@ -28,7 +28,7 @@ HOME_IMPROVEMENT,8
 INCOME,12
 LOAN_DISBURSEMENTS,10
 LOAN_PAYMENTS,10
-MEDICAL,9
+MEDICAL,29
 Merchandise & Supplies-Arts & Jewelry,3
 Merchandise & Supplies-Clothing Stores,3
 Merchandise & Supplies-Computer Supplies,3
@@ -48,6 +48,7 @@ Other-Government Services,4
 Other-Miscellaneous,3
 Personal,9
 PERSONAL_CARE,9
+PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS,29
 Professional Services,4
 RENT_AND_UTILITIES,4
 Restaurant-Bar & Café,2

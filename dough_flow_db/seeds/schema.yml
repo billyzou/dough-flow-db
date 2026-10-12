@@ -13,7 +13,7 @@ seeds:
           - not_null
 
   - name: category_map
-    description: Source category label (Plaid PFC primary, or the bank CSV's category) -> our category.
+    description: Source category label (Plaid PFC primary or detailed, or the bank CSV's category) -> our category. A detailed match wins over the primary.
     config:
       column_types:
         category_id: integer

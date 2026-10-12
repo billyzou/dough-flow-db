@@ -15,6 +15,7 @@ select
     payload->>'name'                                             as description,
     payload->>'merchant_name'                                    as merchant,
     payload->'personal_finance_category'->>'primary'             as external_category,
+    payload->'personal_finance_category'->>'detailed'            as external_category_detailed,
     payload->>'transaction_type'                                 as transaction_type,
     (payload->>'pending')::boolean                               as is_pending,
     loaded_at
