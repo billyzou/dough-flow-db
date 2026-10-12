@@ -6,6 +6,7 @@ docker-compose: http://<host>:8501
 """
 
 import os
+from html import escape
 from pathlib import Path
 
 import altair as alt
@@ -56,6 +57,27 @@ st.markdown("""
 [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
 /* breathing room between each tab's last chart/table and the dancing bread */
 [class*="st-key-dancer-"] { margin-top: 3rem; }
+/* html_table(): looks like st.dataframe, plus hover tooltips. Grays mix with the text color so
+   they work in light and dark themes */
+.dough-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px;
+    border: 1px solid color-mix(in srgb, currentColor 15%, transparent); border-radius: 0.5rem; }
+.dough-table th, .dough-table td { height: 35px; padding: 0 8px; text-align: left; white-space: nowrap;
+    border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+.dough-table th + th, .dough-table td + td { border-left: 1px solid color-mix(in srgb, currentColor 10%, transparent); }
+.dough-table th { font-weight: 400; color: color-mix(in srgb, currentColor 65%, transparent);
+    background: color-mix(in srgb, currentColor 3%, transparent); }
+.dough-table tbody tr:last-child td { border-bottom: none; }
+/* number columns hug their contents so text columns (merchant, category) get the spare width */
+.dough-table .num { text-align: right; width: 1%; padding: 0 16px; }
+.has-tip { position: relative; cursor: help; }
+.has-tip.category { text-decoration: underline dotted; text-underline-offset: 3px; }
+.has-tip.help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+    margin-left: 6px; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; vertical-align: 1px; }
+.tip { visibility: hidden; opacity: 0; transition: opacity 0.1s; position: absolute; top: calc(100% + 6px); left: 0;
+    z-index: 1000; width: max-content; max-width: 280px; padding: 6px 10px; border-radius: 6px;
+    background: #31333f; color: #fff; font-size: 13px; line-height: 1.4; white-space: normal; text-align: left; }
+.tip.right { left: auto; right: 0; }
+.has-tip:hover > .tip { visibility: visible; opacity: 1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,6 +85,22 @@ st.markdown("""
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
 OTHER = '#898781'
 MAX_CATEGORIES = len(PALETTE)
+# What each category includes; shown on hover wherever a category name appears
+CATEGORY_HELP = {
+    'Bills & Utilities': 'Recurring fixed bills: phone, internet, cable, insurance, utilities, bank fees, government services',
+    'Entertainment': 'Streaming services, concerts, events, gifts, donations',
+    'Food & Groceries': "All food spend: groceries (Whole Foods, Trader Joe's, Nijiya), restaurants, bars, cafes, food delivery",
+    'Health & Wellness': 'Doctors, dentists, eye care, pharmacy, gyms and fitness classes',
+    'Housing': 'Rent, home improvement, maintenance, repairs',
+    'Loan Payments': 'Mortgage payments, credit card payments, any debt service',
+    'Personal Care': 'Haircuts, beauty, other personal care services',
+    'Shopping': 'General retail: clothing, electronics, household goods, department stores, online purchases',
+    'Transport': 'Rideshare (Uber, Lyft), public transit, gas, parking, car-related expenses',
+    'Travel': 'Flights, hotels, travel agencies: trips away from home',
+    'Transfers': 'Internal transfers between your own accounts; excluded from all spend charts',
+    'Income': 'All inflows: paychecks, reimbursements, interest, any money coming in',
+    'Other': 'Smaller categories grouped together',
+}
 # First day of the daily Plaid ingest (dags/ingest_plaid.py)
 PLAID_SYNC_START = pd.Timestamp('2026-05-04')
 
@@ -148,11 +186,33 @@ def money_table(df, columns, sort_by):
     total = df.drop(columns=df.columns[0]).sum().to_frame().T
     total.insert(0, df.columns[0], 'Total')
     df = pd.concat([df, total], ignore_index=True).rename(columns=columns)
-    st.dataframe(
-        df.style.format('${:,.0f}', subset=df.columns[1:]),
-        hide_index=True,
-        height=table_height(df),
-    )
+    html_table(df, {c: '${:,.0f}' for c in df.columns[1:]})
+
+
+def html_table(df, formats=None, help=None):
+    # A static table like st.dataframe, which can't show tooltips: a ? on headers listed in
+    # `help`, and each category name in a Category column shows what it includes
+    formats, help = formats or {}, help or {}
+    numeric = {c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])}
+
+    def tip(text, right=False):
+        return f'<span class="tip{" right" if right else ""}">{escape(text)}</span>'
+
+    head = ''.join(
+        f'<th class="{"num" if c in numeric else ""}">{escape(c)}'
+        + (f'<span class="has-tip help">?{tip(help[c], right=c in numeric)}</span>' if c in help else '')
+        + '</th>'
+        for c in df.columns)
+    rows = ''
+    for row in df.to_dict('records'):
+        cells = ''
+        for c in df.columns:
+            text = escape(formats[c].format(row[c]) if c in formats else str(row[c]))
+            if c == 'Category' and row[c] in CATEGORY_HELP:
+                text = f'<span class="has-tip category">{text}{tip(CATEGORY_HELP[row[c]])}</span>'
+            cells += f'<td class="{"num" if c in numeric else ""}">{text}</td>'
+        rows += f'<tr>{cells}</tr>'
+    st.html(f'<table class="dough-table"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>')
 
 
 def money(x, sign=False):
@@ -250,13 +310,9 @@ with this_month_tab:
     next_col.button(':material/chevron_right:', key='merchants_next', disabled=page == last_page,
                     on_click=lambda: st.session_state.update(merchant_page=page + 1))
     shown = merchants.iloc[page * 10:(page + 1) * 10]
-    table_col.dataframe(
-        shown.style.format({'Total': '${:,.2f}', '% of spend': '{:.1%}'}),
-        hide_index=True,
-        height=table_height(shown),
-        column_config={'% of spend': st.column_config.Column(
-            help='Share of all spending in the last 28 days, including charges with no merchant')},
-    )
+    with table_col:
+        html_table(shown, {'Total': '${:,.2f}', '% of spend': '{:.1%}'},
+                   help={'% of spend': 'Share of all spending in the last 28 days, including charges with no merchant'})
     table_col.caption(f'{page * 10 + 1}–{page * 10 + len(shown)} of {len(merchants)}')
 
 # ---------- Transactions: what's behind the numbers? ----------
@@ -281,7 +337,9 @@ with transactions_tab:
     # While a range is half-picked the widget returns one date; treat it as a single day
     start, end = (tuple(dates) * 2)[:2]
     search = search_col.text_input('Search', placeholder='Merchant or description')
-    chosen_categories = category_col.multiselect('Category', sorted(txns['category'].unique()), placeholder='All')
+    category_list = '\n'.join(f'- **{c}**: {h}' for c, h in CATEGORY_HELP.items() if c != 'Other')
+    chosen_categories = category_col.multiselect('Category', sorted(txns['category'].unique()), placeholder='All',
+                                                 help=escape_dollars(category_list))
     chosen_accounts = account_col.multiselect('Account', sorted(txns['account'].unique()), placeholder='All')
 
     shown = txns[txns['transaction_date'].between(start, end)]
@@ -304,7 +362,8 @@ with transactions_tab:
             'transaction_date': st.column_config.DateColumn('Date', format='MMM D, YYYY'),
             'merchant': 'Merchant',
             'description': 'Description',
-            'category': 'Category',
+            'category': st.column_config.TextColumn(
+                'Category', help='\n'.join(f'{c}: {h}' for c, h in CATEGORY_HELP.items() if c != 'Other')),
             'account': 'Account',
             'owner': 'Owner',
             'amount': st.column_config.NumberColumn('Amount', format='dollar'),
@@ -341,6 +400,7 @@ with trends_tab:
     trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
     trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
     trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
+    trends['includes'] = trends['category'].map(CATEGORY_HELP).fillna('')
 
     domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
     category_scale = alt.Scale(domain=domain, range=PALETTE[:len(top)] + [OTHER])
@@ -355,7 +415,7 @@ with trends_tab:
             y=alt.Y(f'{y}:Q', title=None, stack=stack, axis=alt.Axis(format=y_format)),
             color=category_color,
             order=alt.Order('rank:Q'),
-            tooltip=[alt.Tooltip('label:N', title='Month'), 'category:N',
+            tooltip=[alt.Tooltip('label:N', title='Month'), 'category:N', alt.Tooltip('includes:N', title='Includes'),
                      alt.Tooltip('total:Q', format='$,.0f'), alt.Tooltip('share:Q', format='.0%')],
         ).properties(height=400)
 
@@ -501,20 +561,7 @@ with net_worth_tab:
 # ---------- Glossary ----------
 with glossary_tab:
     st.markdown("""
-| Category | What's included |
-|---|---|
-| **Bills & Utilities** | Recurring fixed bills — phone, internet, cable, insurance, utilities, bank fees, government services |
-| **Entertainment** | Streaming services, concerts, events, gifts, donations |
-| **Food & Groceries** | All food spend — groceries (Whole Foods, Trader Joe's, Nijiya), restaurants, bars, cafes, food delivery |
-| **Health & Wellness** | Gym memberships, fitness classes, wellness services |
-| **Housing** | Rent, home improvement, maintenance, repairs |
-| **Loan Payments** | Mortgage payments, credit card payments, any debt service |
-| **Personal Care** | Medical, pharmacy, haircuts, personal hygiene services |
-| **Shopping** | General retail — clothing, electronics, household goods, department stores, online purchases |
-| **Transport** | Rideshare (Uber, Lyft), public transit, gas, parking, car-related expenses |
-| **Travel** | Flights, hotels, travel agencies — trips away from home |
-| **Transfers** | Internal transfers between your own accounts — excluded from all spend charts |
-| **Income** | All inflows — paychecks, reimbursements, interest, any money coming in |
+Hover over a category name anywhere in the dashboard to see what it includes.
 
 **Notes**
 - Transfers are excluded from all spend and income totals to avoid double-counting.
