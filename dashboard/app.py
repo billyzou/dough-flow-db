@@ -237,11 +237,11 @@ with this_month_tab:
         }, 'this_month')
 
     st.subheader('Top Merchants')
-    st.caption('Last 28 days')
-    merchants = query('select merchant, total_spent, transaction_count from gold.top_merchants order by total_spent desc limit 20')
-    merchants = merchants.rename(columns={'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns'})
+    st.caption('Last 28 days · % is the share of all spending in that time, including charges with no merchant')
+    merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc limit 10')
+    merchants = merchants.rename(columns={'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns', 'share_of_spend': '% of spend'})
     st.dataframe(
-        merchants.style.format({'Total': '${:,.2f}'}),
+        merchants.style.format({'Total': '${:,.2f}', '% of spend': '{:.1%}'}),
         hide_index=True,
         height=table_height(merchants),
     )
