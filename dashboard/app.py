@@ -238,13 +238,24 @@ with this_month_tab:
 
     st.subheader('Top Merchants')
     st.caption('Last 28 days · % is the share of all spending in that time, including charges with no merchant')
-    merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc limit 10')
-    merchants = merchants.rename(columns={'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns', 'share_of_spend': '% of spend'})
-    st.dataframe(
-        merchants.style.format({'Total': '${:,.2f}', '% of spend': '{:.1%}'}),
+    merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc')
+    merchants.insert(0, 'rank', range(1, len(merchants) + 1))
+    merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns', 'share_of_spend': '% of spend'})
+    # 10 at a time; the arrows on either side page through the rest
+    last_page = max(0, (len(merchants) - 1) // 10)
+    page = min(st.session_state.get('merchant_page', 0), last_page)
+    prev_col, table_col, next_col = st.columns([1, 30, 1], vertical_alignment='center')
+    prev_col.button(':material/chevron_left:', key='merchants_prev', disabled=page == 0,
+                    on_click=lambda: st.session_state.update(merchant_page=page - 1))
+    next_col.button(':material/chevron_right:', key='merchants_next', disabled=page == last_page,
+                    on_click=lambda: st.session_state.update(merchant_page=page + 1))
+    shown = merchants.iloc[page * 10:(page + 1) * 10]
+    table_col.dataframe(
+        shown.style.format({'Total': '${:,.2f}', '% of spend': '{:.1%}'}),
         hide_index=True,
-        height=table_height(merchants),
+        height=table_height(shown),
     )
+    table_col.caption(f'{page * 10 + 1}–{page * 10 + len(shown)} of {len(merchants)}')
 
 # ---------- Transactions: what's behind the numbers? ----------
 with transactions_tab:
