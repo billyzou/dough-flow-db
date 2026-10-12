@@ -67,7 +67,8 @@ MAX_CATEGORIES = len(PALETTE)
 PLAID_SYNC_START = pd.Timestamp('2026-05-04')
 
 
-@st.cache_data(ttl=600)
+# No spinner: on a cache miss it adds an element above the tabs, which resets them to the first tab
+@st.cache_data(ttl=600, show_spinner=False)
 def query(sql):
     with psycopg2.connect(
         host=os.environ['DB_HOST'],
