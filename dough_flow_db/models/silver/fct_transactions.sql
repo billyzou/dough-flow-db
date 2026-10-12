@@ -54,7 +54,8 @@ select
     -- the card) and cancel; tests/card_payments_are_paired.sql guards that.
     case when c.category_type = 'expense' and c.category_name != 'Transfers' then -u.amount end as spend,
     u.description,
-    u.merchant,
+    -- PayPal charges arrive without a merchant, described as "PAYPAL *<payee>"
+    coalesce(u.merchant, case when u.description ilike 'paypal%' then 'PayPal' end) as merchant,
     u.external_category,
     u.transaction_type,
     u.source
