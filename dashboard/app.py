@@ -237,7 +237,7 @@ with this_month_tab:
         }, 'this_month')
 
     st.subheader('Top Merchants')
-    st.caption('Last 28 days · % is the share of all spending in that time, including charges with no merchant')
+    st.caption('Last 28 days')
     merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc')
     merchants.insert(0, 'rank', range(1, len(merchants) + 1))
     merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns', 'share_of_spend': '% of spend'})
@@ -254,6 +254,8 @@ with this_month_tab:
         shown.style.format({'Total': '${:,.2f}', '% of spend': '{:.1%}'}),
         hide_index=True,
         height=table_height(shown),
+        column_config={'% of spend': st.column_config.Column(
+            help='Share of all spending in the last 28 days, including charges with no merchant')},
     )
     table_col.caption(f'{page * 10 + 1}–{page * 10 + len(shown)} of {len(merchants)}')
 
