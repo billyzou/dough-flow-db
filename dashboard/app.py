@@ -118,7 +118,7 @@ def query(sql):
         return pd.read_sql(sql, conn)
 
 
-def crosshair(df, x, series, y, y_format, order):
+def crosshair(df, x, series, y, y_format, order, monthly=False):
     # Hover anywhere on the plot: a hairline snaps to the nearest date and one tooltip
     # lists every series there, so the pointer never has to land on a line
     wide = df.pivot_table(index=x, columns=series, values=y, aggfunc='sum').reset_index()
@@ -127,13 +127,14 @@ def crosshair(df, x, series, y, y_format, order):
     rule = alt.Chart(wide).mark_rule(color=OTHER).encode(
         x=f'{x}:T',
         opacity=alt.condition(hover, alt.value(0.8), alt.value(0)),
-        tooltip=[alt.Tooltip(f'{x}:T', title='Date', format='%b %d, %Y')]
+        tooltip=[alt.Tooltip(f'{x}:T', title='Month' if monthly else 'Date', format='%b %Y' if monthly else '%b %d, %Y')]
                 + [alt.Tooltip(field=str(s), type='quantitative', format=y_format) for s in order],
     ).add_params(hover)
     return hover, rule
 
 
-def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, show_value=False):
+def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, show_value=False, fmt=None,
+               tooltip=None):
     # Name each series just past the chart's right edge instead of using a legend. Labels
     # that would overlap are nudged apart (and kept under `top`), each with a dot in its
     # series color beside it.
@@ -147,8 +148,11 @@ def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, sho
         for i in range(len(label_y) - 2, -1, -1):
             label_y[i] = min(label_y[i], label_y[i + 1] - gap)
     ends['label_y'] = label_y
-    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {money(v)}') if show_value else '')
+    fmt = fmt or money
+    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {fmt(v)}') if show_value else '')
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
+    if tooltip:
+        chart = chart.encode(tooltip=tooltip)
     dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=6).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)))
     # label text stays neutral; the dot beside it carries the series color
@@ -158,20 +162,31 @@ def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, sho
     return [dot, text]
 
 
-def line_chart(df, x, y, color, x_format, colors, zero=True):
+def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', fmt=None, category_help=False,
+               monthly=False):
+    # category_help: series are categories; hovering a line or its label shows what it includes
     color_scale = alt.Scale(domain=list(colors), range=list(colors.values()))
+    tooltip = None
+    if category_help:
+        df = df.assign(includes=df[color].map(CATEGORY_HELP).fillna(''))
+        tooltip = [alt.Tooltip(f'{color}:N', title='Category'), alt.Tooltip('includes:N', title='Includes')]
     base = alt.Chart(df).encode(
-        x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format)),
-        y=alt.Y(f'{y}:Q', title=None, scale=alt.Scale(zero=zero), axis=alt.Axis(format='$,.0f')),
+        # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
+        x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format, values=[
+            alt.DateTime(year=d.year, month=d.month, date=1) for d in sorted(df[x].unique())] if monthly else alt.Undefined)),
+        y=alt.Y(f'{y}:Q', title=None, scale=alt.Scale(zero=zero), axis=alt.Axis(format=y_format)),
         color=alt.Color(f'{color}:N', title=None, scale=color_scale, legend=None),
     )
-    hover, rule = crosshair(df, x, color, y, '$,.0f', colors)
+    hover, rule = crosshair(df, x, color, y, y_format, colors, monthly)
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
         opacity=alt.condition(hover, alt.value(1), alt.value(0)))
+    line = base.mark_line(strokeWidth=2)
+    if tooltip:
+        line = line.encode(tooltip=tooltip)
     span = df[y].max() - (df[y].min() if not zero else min(df[y].min(), 0))
-    labels = end_labels(df[df[x] == df[x].max()], base.encoding.x, y, color, color_scale, '$,.0f',
-                        gap=span * 0.06, show_value=True)
-    return alt.layer(base.mark_line(strokeWidth=2), points, rule, *labels)
+    labels = end_labels(df[df[x] == df[x].max()], base.encoding.x, y, color, color_scale, y_format,
+                        gap=span * 0.06, show_value=True, fmt=fmt, tooltip=tooltip)
+    return alt.layer(line, points, rule, *labels)
 
 
 def stack_midpoints(df, series, value, rank):
@@ -400,30 +415,24 @@ with trends_tab:
     trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
     trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
     trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
-    trends['includes'] = trends['category'].map(CATEGORY_HELP).fillna('')
 
     domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
-    category_scale = alt.Scale(domain=domain, range=PALETTE[:len(top)] + [OTHER])
-    category_color = alt.Color('category:N', title=None, sort=domain, scale=category_scale,
-                               legend=alt.Legend(orient='right'))
-    trends['rank'] = trends['category'].map({c: i for i, c in enumerate(domain)})
-    trends_x = month_axis(trends)
-
-    def stacked_bar(y, y_format, stack):
-        return alt.Chart(trends).mark_bar(stroke='white', strokeWidth=1).encode(
-            x=trends_x,
-            y=alt.Y(f'{y}:Q', title=None, stack=stack, axis=alt.Axis(format=y_format)),
-            color=category_color,
-            order=alt.Order('rank:Q'),
-            tooltip=[alt.Tooltip('label:N', title='Month'), 'category:N', alt.Tooltip('includes:N', title='Includes'),
-                     alt.Tooltip('total:Q', format='$,.0f'), alt.Tooltip('share:Q', format='.0%')],
-        ).properties(height=400)
+    category_colors = dict(zip(domain, PALETTE[:len(top)] + [OTHER]))
+    # a month with no spend in a category is 0, not a gap in its line
+    trends = (trends.set_index(['month', 'category'])
+              .reindex(pd.MultiIndex.from_product([trends['month'].unique(), domain], names=['month', 'category']),
+                       fill_value=0)
+              .reset_index())
+    trends['month'] = pd.to_datetime(trends['month'])
 
     st.subheader('Monthly Spend by Category')
-    st.altair_chart(stacked_bar('total', '$,.0f', 'zero'), use_container_width=True)
+    st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors,
+                               category_help=True, monthly=True).properties(height=400), use_container_width=True)
 
     st.subheader('Monthly Spend % by Category')
-    st.altair_chart(stacked_bar('total', '.0%', 'normalize'), use_container_width=True)
+    st.altair_chart(line_chart(trends, 'month', 'share', 'category', '%b %Y', category_colors, y_format='.0%',
+                               fmt='{:.0%}'.format, category_help=True, monthly=True).properties(height=400),
+                    use_container_width=True)
 
     st.subheader('Net Cash Flow')
     cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
