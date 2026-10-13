@@ -85,6 +85,8 @@ st.markdown("""
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
 OTHER = '#898781'
 MAX_CATEGORIES = len(PALETTE)
+LINE_CLICK_HELP = ('Click a line or its label to show only that line. Option-click to hide it (you can hide several). '
+                   'Double-click to bring them all back.')
 # What each category includes; shown on hover wherever a category name appears
 CATEGORY_HELP = {
     'Bills & Utilities': 'Recurring fixed bills: phone, internet, cable, insurance, utilities, bank fees, government services',
@@ -92,12 +94,13 @@ CATEGORY_HELP = {
     'Food & Groceries': "All food spend: groceries (Whole Foods, Trader Joe's, Nijiya), restaurants, bars, cafes, food delivery",
     'Health & Wellness': 'Doctors, dentists, eye care, pharmacy, gyms and fitness classes',
     'Housing': 'Rent, home improvement, maintenance, repairs',
-    'Loan Payments': 'Mortgage payments, credit card payments, any debt service',
+    'Loan Payments': ('Mortgage payments, credit card payments, any debt service. A card payment lands here twice '
+                      '(out of checking, into the card) and cancels out; the purchases count in their own categories'),
     'Personal Care': 'Haircuts, beauty, other personal care services',
     'Shopping': 'General retail: clothing, electronics, household goods, department stores, online purchases',
     'Transport': 'Rideshare (Uber, Lyft), public transit, gas, parking, car-related expenses',
     'Travel': 'Flights, hotels, travel agencies: trips away from home',
-    'Transfers': 'Internal transfers between your own accounts; excluded from all spend charts',
+    'Transfers': 'Internal transfers between your own accounts; left out of spend and income totals so nothing is counted twice',
     'Income': 'All inflows: paychecks, reimbursements, interest, any money coming in',
     'Other': 'Smaller categories grouped together',
 }
@@ -178,15 +181,29 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
         color=alt.Color(f'{color}:N', title=None, scale=color_scale, legend=None),
     )
     hover, rule = crosshair(df, x, color, y, y_format, colors, monthly)
+    # Click a line or its label to show only that line; Option-click to hide it (several can be
+    # hidden); double-click to bring them all back. Hidden lines leave the y scale, so the rest rescale.
+    pick = alt.selection_point(name='pick', fields=[color], on='click[!event.altKey]', clear='dblclick')
+    drop = alt.selection_point(name='drop', fields=[color], on='click[event.altKey]', toggle='true',
+                               clear='dblclick', empty=False)
+    # written out because pick & ~drop loses drop's empty=False, which hides every line
+    shown = {'and': [{'param': 'pick'}, {'not': {'param': 'drop', 'empty': False}}]}
+    isolated = "length(data('pick_store'))"
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
-        opacity=alt.condition(hover, alt.value(1), alt.value(0)))
-    line = base.mark_line(strokeWidth=2)
+        opacity=alt.condition(hover, alt.value(1), alt.value(0))).transform_filter(shown)
+    line = base.mark_line(strokeWidth=2).transform_filter(shown).add_params(pick, drop)
     if tooltip:
         line = line.encode(tooltip=tooltip)
+    ends = df[df[x] == df[x].max()]
     span = df[y].max() - (df[y].min() if not zero else min(df[y].min(), 0))
-    labels = end_labels(df[df[x] == df[x].max()], base.encoding.x, y, color, color_scale, y_format,
-                        gap=span * 0.06, show_value=True, fmt=fmt, tooltip=tooltip)
-    return alt.layer(line, points, rule, *labels)
+    labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.06, show_value=True, fmt=fmt,
+        tooltip=tooltip)]
+    # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
+    picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, fmt=fmt, tooltip=tooltip)]
+    # the crosshair goes underneath, so clicks land on lines and labels
+    return alt.layer(rule, line, points, *labels, *picked_labels)
 
 
 def stack_midpoints(df, series, value, rank):
@@ -196,12 +213,12 @@ def stack_midpoints(df, series, value, rank):
     return df
 
 
-def money_table(df, columns, sort_by):
+def money_table(df, columns, sort_by, help=None):
     df = df[list(columns)].sort_values(sort_by, ascending=False)
     total = df.drop(columns=df.columns[0]).sum().to_frame().T
     total.insert(0, df.columns[0], 'Total')
     df = pd.concat([df, total], ignore_index=True).rename(columns=columns)
-    html_table(df, {c: '${:,.0f}' for c in df.columns[1:]})
+    html_table(df, {c: '${:,.0f}' for c in df.columns[1:]}, help=help)
 
 
 def html_table(df, formats=None, help=None):
@@ -257,8 +274,8 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.title('Dough Flow')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, this_month_tab, transactions_tab, trends_tab, glossary_tab = st.tabs(
-    ['Net Worth', 'This Month', 'Transactions', 'Trends', 'Glossary'])
+net_worth_tab, this_month_tab, transactions_tab, trends_tab = st.tabs(
+    ['Net Worth', 'This Month', 'Transactions', 'Trends'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -297,7 +314,8 @@ with this_month_tab:
     left, right = st.columns(2)
 
     with left:
-        st.subheader('MTD Cumulative Spend')
+        st.subheader('MTD Cumulative Spend', help='Usual Pace is the average month (last 12 fully completed months) '
+                     'spread evenly across its days, so it ends at the typical monthly total.\n\n' + LINE_CLICK_HELP)
         mtd = mtd.drop(columns='avg_monthly_spend').rename(columns={
             'this_month': 'This Month', 'prior_year_month': 'Prior Year', 'usual_pace': 'Usual Pace',
         }).melt('date', var_name='series', value_name='spend')
@@ -312,7 +330,8 @@ with this_month_tab:
         money_table(categories, {
             'category_name': 'Category', 'this_month': 'This Month',
             'last_year_month': 'Prior Year', 'monthly_avg_12mo': '12-mo Avg',
-        }, 'this_month')
+        }, 'this_month', help={'Prior Year': 'The whole of this month, one year ago',
+                               '12-mo Avg': 'Average month over the last 12 fully completed months'})
 
     st.subheader('Top Merchants')
     st.caption('Last 28 days')
@@ -394,7 +413,7 @@ with trends_tab:
     left, right = st.columns(2)
 
     with left:
-        st.subheader('YTD Cumulative Spend')
+        st.subheader('YTD Cumulative Spend', help=LINE_CLICK_HELP)
         ytd = query("""
             select date, year, cumulative_total
             from gold.daily_cumulative_ytd
@@ -410,7 +429,7 @@ with trends_tab:
     with right:
         st.subheader('YTD Spend by Category')
         money_table(categories, {'category_name': 'Category', 'this_year': 'This Year', 'last_year': 'Prior Year'},
-                    'this_year')
+                    'this_year', help={'Prior Year': 'Last year, Jan 1 through the same date'})
 
     trends = query('select month, category_name, total from gold.category_trends')
     ranked = trends.groupby('category_name')['total'].sum().sort_values(ascending=False).index.tolist()
@@ -420,6 +439,8 @@ with trends_tab:
     trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
 
     domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
+    TOP_CATEGORIES_HELP = (f'Shows the {MAX_CATEGORIES} largest categories; the rest are grouped as Other '
+                           f'(the tables list every category).\n\n{LINE_CLICK_HELP}')
     category_colors = dict(zip(domain, PALETTE[:len(top)] + [OTHER]))
     # a month with no spend in a category is 0, not a gap in its line
     trends = (trends.set_index(['month', 'category'])
@@ -428,16 +449,17 @@ with trends_tab:
               .reset_index())
     trends['month'] = pd.to_datetime(trends['month'])
 
-    st.subheader('Monthly Spend by Category')
+    st.subheader('Monthly Spend by Category', help=TOP_CATEGORIES_HELP)
     st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors,
                                category_help=True, monthly=True).properties(height=400), use_container_width=True)
 
-    st.subheader('Monthly Spend % by Category')
+    st.subheader('Monthly Spend % by Category', help=TOP_CATEGORIES_HELP)
     st.altair_chart(line_chart(trends, 'month', 'share', 'category', '%b %Y', category_colors, y_format='.0%',
                                fmt='{:.0%}'.format, category_help=True, monthly=True).properties(height=400),
                     use_container_width=True)
 
-    st.subheader('Net Cash Flow')
+    st.subheader('Net Cash Flow', help="Income minus spending. Transfers between your own accounts are left out of both, "
+                 "so they aren't counted twice.")
     cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
     st.altair_chart(
         alt.Chart(cash).mark_bar(cornerRadius=4).encode(
@@ -502,7 +524,7 @@ with net_worth_tab:
     left, right = st.columns(2)
 
     with left:
-        st.subheader('Assets by Type')
+        st.subheader('Assets by Type', help=LINE_CLICK_HELP)
         st.caption('Credit card balances are subtracted from net worth but not shown here')
         st.altair_chart(
             line_chart(by_group, 'date', 'value', 'account_group', '%b %d', dict(zip(groups, PALETTE))),
@@ -570,19 +592,6 @@ with net_worth_tab:
             f'{len(stale)} accounts have no balance in over 30 days and are carried forward at their last value: '
             f'{money(stale["value"].sum())} in total. Update them with scripts/update_balance.py.'))
 
-# ---------- Glossary ----------
-with glossary_tab:
-    st.markdown("""
-Hover over a category name anywhere in the dashboard to see what it includes.
-
-**Notes**
-- Transfers are excluded from all spend and income totals to avoid double-counting.
-- Loan Payments includes both mortgage and credit card payments. Credit card purchases are captured in their respective categories at transaction time.
-- Usual Pace on the MTD chart is the average month (last 12 fully completed calendar months) spread evenly across the days, so it ends at the typical monthly total.
-- Prior Year columns compare the same time period one year ago.
-- The two monthly category charts show the 7 largest categories; the rest are grouped as "Other" (the tables list every category).
-""")
-
-for i, tab in enumerate((net_worth_tab, this_month_tab, transactions_tab, trends_tab, glossary_tab)):
+for i, tab in enumerate((net_worth_tab, this_month_tab, transactions_tab, trends_tab)):
     with tab, st.container(horizontal_alignment='center', key=f'dancer-{i}'):
         st.image(DANCING_ICON)
