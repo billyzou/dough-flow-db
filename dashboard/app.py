@@ -263,9 +263,12 @@ net_worth_tab, this_month_tab, transactions_tab, trends_tab, glossary_tab = st.t
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
     mtd = query('select date, this_month, prior_year_month, avg_monthly_spend from gold.daily_cumulative_mtd')
+    # Usual pace: the 12-mo avg month spread evenly over its days. The chart's line and the
+    # "vs usual pace" delta both use it, so they agree
+    days_in_month = pd.Timestamp(mtd['date'].iloc[-1]).days_in_month
+    mtd['usual_pace'] = mtd['avg_monthly_spend'] * pd.to_datetime(mtd['date']).dt.day / days_in_month
     today = mtd.iloc[-1]
-    # 12-mo avg month spread evenly over the days, so "usual pace" by today's date
-    pace = today['avg_monthly_spend'] * today['date'].day / pd.Timestamp(today['date']).days_in_month
+    pace = today['usual_pace']
     net_worth = query('select sum(net_worth_contribution) as total, min(snapshot_date) as oldest from gold.net_worth').iloc[0]
     syncs = query("""
         select distinct on (enrollment) enrollment, started_at, success, error_message
@@ -295,12 +298,12 @@ with this_month_tab:
 
     with left:
         st.subheader('MTD Cumulative Spend')
-        mtd = mtd.rename(columns={
-            'this_month': 'This Month', 'prior_year_month': 'Prior Year', 'avg_monthly_spend': '12-mo Avg',
+        mtd = mtd.drop(columns='avg_monthly_spend').rename(columns={
+            'this_month': 'This Month', 'prior_year_month': 'Prior Year', 'usual_pace': 'Usual Pace',
         }).melt('date', var_name='series', value_name='spend')
         st.altair_chart(
             line_chart(mtd, 'date', 'spend', 'series', '%b %d',
-                       {'This Month': PALETTE[0], 'Prior Year': OTHER, '12-mo Avg': PALETTE[1]}),
+                       {'This Month': PALETTE[0], 'Prior Year': OTHER, 'Usual Pace': PALETTE[1]}),
             use_container_width=True,
         )
 
@@ -575,7 +578,7 @@ Hover over a category name anywhere in the dashboard to see what it includes.
 **Notes**
 - Transfers are excluded from all spend and income totals to avoid double-counting.
 - Loan Payments includes both mortgage and credit card payments. Credit card purchases are captured in their respective categories at transaction time.
-- 12-mo Avg on the MTD chart is a rolling average of the last 12 fully completed calendar months.
+- Usual Pace on the MTD chart is the average month (last 12 fully completed calendar months) spread evenly across the days, so it ends at the typical monthly total.
 - Prior Year columns compare the same time period one year ago.
 - The two monthly category charts show the 7 largest categories; the rest are grouped as "Other" (the tables list every category).
 """)
