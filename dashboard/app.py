@@ -59,6 +59,8 @@ st.markdown("""
 [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
 /* breathing room between each tab's last chart/table and the dancing bread */
 [class*="st-key-dancer-"] { margin-top: 3rem; }
+/* line charts: anywhere on the plot clicks the nearest line (see line_chart) */
+.line_targets_voronoi path { cursor: pointer; }
 /* html_table(): looks like st.dataframe, plus hover tooltips. Grays mix with the text color so
    they work in light and dark themes */
 .dough-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px;
@@ -184,10 +186,17 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
                monthly=False):
     # category_help: series are categories; hovering a line or its label shows what it includes
     color_scale = alt.Scale(domain=list(colors), range=list(colors.values()))
-    tooltip = None
+    label_tooltip = alt.value(None)  # otherwise Streamlit shows every field of the label row
     if category_help:
         df = df.assign(includes=df[color].map(CATEGORY_HELP).fillna(''))
-        tooltip = [alt.Tooltip(f'{color}:N', title='Category'), alt.Tooltip('includes:N', title='Includes')]
+        label_tooltip = [alt.Tooltip(f'{color}:N', title='Category'), alt.Tooltip('includes:N', title='Includes')]
+    # each point also carries every series' value at its x, so one tooltip can list them all
+    wide = df.pivot_table(index=x, columns=color, values=y, aggfunc='sum')
+    wide.columns = [f'v_{c}' for c in wide.columns]
+    df = df.merge(wide.reset_index(), on=x)
+    hover_tooltip = ([alt.Tooltip(f'{x}:T', title='Month' if monthly else 'Date', format='%b %Y' if monthly else '%b %d, %Y')]
+                     + (label_tooltip if category_help else [])
+                     + [alt.Tooltip(field=f'v_{s}', type='quantitative', format=y_format, title=str(s)) for s in colors])
     base = alt.Chart(df).encode(
         # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
         x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format, values=[
@@ -195,37 +204,48 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
         y=alt.Y(f'{y}:Q', title=None, scale=alt.Scale(zero=zero), axis=alt.Axis(format=y_format)),
         color=alt.Color(f'{color}:N', title=None, scale=color_scale, legend=None),
     )
-    hover, rule = crosshair(df, x, color, y, y_format, colors, monthly)
-    # Click a line or its label to show only that line; Option-click to hide it (several can be
-    # hidden); double-click to bring them all back. Hidden lines leave the y scale, so the rest rescale.
-    # only clicks on a line or label count: the crosshair's hover layer has no series, and picking it hid every line
-    on_series = f'event.item && event.item.datum && event.item.datum.{color} != null'
-    pick = alt.selection_point(name='pick', fields=[color], on=f'click[!event.altKey && {on_series}]', clear='dblclick')
-    drop = alt.selection_point(name='drop', fields=[color], on=f'click[event.altKey && {on_series}]', toggle='true',
+    # Everything keys off the point nearest the pointer, anywhere on the plot: hovering shows a hairline,
+    # a dot on each line and one tooltip; clicking shows only the nearest line, Option-click hides it
+    # (several can be hidden), double-click brings them all back. Hidden lines leave the y scale, so the
+    # rest rescale. Labels can be clicked the same way.
+    hover = alt.selection_point(name='hover', fields=[x], nearest=True, on='pointerover', clear='pointerout',
+                                empty=False)
+    pick = alt.selection_point(name='pick', fields=[color], nearest=True, on='click[!event.altKey]', clear='dblclick')
+    drop = alt.selection_point(name='drop', fields=[color], nearest=True, on='click[event.altKey]', toggle='true',
                                clear='dblclick', empty=False)
-    # written out because pick & ~drop loses drop's empty=False, which hides every line
-    shown = {'and': [{'param': 'pick'}, {'not': {'param': 'drop', 'empty': False}}]}
-    isolated = "length(data('pick_store'))"
+    # labels need their own (not nearest) copies: a nearest selection gives every layer it's on a
+    # hover area over the whole plot, and the labels' one would cover the targets'
+    pick_label = alt.selection_point(name='pick_label', fields=[color], on='click[!event.altKey]', clear='dblclick')
+    drop_label = alt.selection_point(name='drop_label', fields=[color], on='click[event.altKey]', toggle='true',
+                                     clear='dblclick', empty=False)
+    # shown: picked in either (or nothing picked anywhere), and hidden in neither. Written out
+    # because & and ~ on selections lose empty=False
+    shown = {'and': [
+        {'or': [{'and': [{'param': 'pick'}, {'param': 'pick_label'}]},
+                {'param': 'pick', 'empty': False}, {'param': 'pick_label', 'empty': False}]},
+        {'not': {'or': [{'param': 'drop', 'empty': False}, {'param': 'drop_label', 'empty': False}]}},
+    ]}
+    isolated = "(length(data('pick_store')) || length(data('pick_label_store')))"
+    rule = alt.Chart(df).mark_rule(color=OTHER).encode(
+        x=base.encoding.x, opacity=alt.condition(hover, alt.value(0.8), alt.value(0))).transform_filter(shown)
+    line = base.mark_line(strokeWidth=3).transform_filter(shown)
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
         opacity=alt.condition(hover, alt.value(1), alt.value(0))).transform_filter(shown)
-    line = base.mark_line(strokeWidth=3, cursor='pointer').transform_filter(shown).add_params(pick, drop)
-    # a wide, nearly invisible copy underneath catches clicks a few pixels off the line (at opacity 0
-    # it isn't drawn, so it can't be clicked)
-    hit = base.mark_line(strokeWidth=14, opacity=0.001, cursor='pointer').transform_filter(shown).add_params(pick, drop)
-    if tooltip:
-        line, hit = line.encode(tooltip=tooltip), hit.encode(tooltip=tooltip)
+    # invisible points on top that the hover and clicks are taken from (named for the pointer cursor CSS)
+    targets = base.mark_point(opacity=0).encode(tooltip=hover_tooltip).transform_filter(shown).add_params(
+        hover, pick, drop).properties(name='line_targets')
     ends = df[df[x] == df[x].max()]
     floor = df[y].min() if not zero else min(df[y].min(), 0)
     span = df[y].max() - floor
-    labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
+    labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick_label, drop_label) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.05, floor=floor, show_value=True, fmt=fmt,
-        tooltip=tooltip, cursor='pointer')]
+        tooltip=label_tooltip, cursor='pointer')]
     # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
-        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, fmt=fmt, tooltip=tooltip)]
-    # the crosshair goes underneath, so clicks land on lines and labels
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, fmt=fmt, tooltip=label_tooltip)]
+    # labels sit past the plot's right edge, outside the targets' hover area, so they still get their own clicks.
     # extra right padding: fitting to the container leaves the end of the longest label clipped
-    return alt.layer(rule, hit, line, points, *labels, *picked_labels).properties(
+    return alt.layer(rule, line, points, *labels, *picked_labels, targets).properties(
         padding={'left': 5, 'top': 5, 'bottom': 5, 'right': 16})
 
 
