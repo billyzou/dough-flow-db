@@ -240,9 +240,9 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
         x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format, values=[
             alt.DateTime(year=d.year, month=d.month, date=1) for d in sorted(df[x].unique())] if monthly else alt.Undefined,
-            # the month bars put category names there instead
-            labelExpr=f"length(data('month_store')) ? '' : timeFormat(datum.value, '{x_format}')"
-            if month_bars is not None else alt.Undefined)),
+            **month_label_axis(f"month(datum.value) == 0", "timeFormat(datum.value, '%b')", "timeFormat(datum.value, '%Y')",
+                               hide_when="length(data('month_store'))" if month_bars is not None else None)
+            if monthly else {})),
         y=alt.Y(f'{y}:Q', title=None, scale=alt.Scale(zero=zero), axis=alt.Axis(format=y_format)),
         color=alt.Color(f'{color}:N', title=None, scale=color_scale, legend=None),
     )
@@ -438,11 +438,22 @@ def table_height(df):
     return (len(df) + 1) * 35 + 3
 
 
+def month_label_axis(is_january, month_name, year, hide_when=None):
+    # Axis settings that label every month by name, with the year on a second line under the first
+    # month and each January: 'Nov 2025' on every tick doesn't fit 12 months in a half-width chart.
+    # The arguments are Vega expressions on the axis label's datum.
+    label = f"[{month_name}, ({is_january} || datum.index == 0) ? {year} : '']"
+    if hide_when:
+        label = f"{hide_when} ? '' : {label}"
+    return {'labelExpr': label, 'labelOverlap': False}
+
+
 def month_axis(df):
     # Label months as text so each bar sits under its own month name
     df['label'] = df['month'].map(lambda m: m.strftime('%b %Y'))
     return alt.X('label:O', title=None, sort=sorted(df['label'].unique(), key=lambda l: pd.to_datetime(l)),
-                 axis=alt.Axis(labelAngle=0))
+                 axis=alt.Axis(labelAngle=0, **month_label_axis(
+                     "split(datum.value, ' ')[0] == 'Jan'", "split(datum.value, ' ')[0]", "split(datum.value, ' ')[1]")))
 
 
 with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
