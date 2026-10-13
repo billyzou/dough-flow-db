@@ -61,6 +61,7 @@ select
     a.account_name,
     a.institution,
     a.account_type,
+    a.owner,
     case
         when a.account_type in ('checking', 'savings', 'cash') then 'Cash'
         when a.account_name ~* '\m(401k|ira)\M' then 'Retirement'

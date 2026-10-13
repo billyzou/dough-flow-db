@@ -712,8 +712,8 @@ with this_year_tab:
 # ---------- Net Worth: how are my assets growing? ----------
 with net_worth_tab:
     balances = query("""
-        select date, account_id, institution || ' · ' || account_name as account, account_group,
-               is_linked, net_worth_contribution as value, snapshot_date
+        select date, account_id, institution || ' · ' || account_name as account, initcap(owner) as owner,
+               account_group, is_linked, net_worth_contribution as value, snapshot_date
         from gold.daily_balances
     """)
     balances['date'] = pd.to_datetime(balances['date'])
@@ -805,8 +805,8 @@ with net_worth_tab:
         color = '#30a46c' if v.startswith('+') else '#e5484d' if v.startswith('-') else None
         return f'color: {color}; text-align: right' if color else 'text-align: right'
 
-    table = accounts[['account', 'account_group', 'value', 'change', 'last_updated']].assign(
-        change=accounts['change'].map(signed_cents))
+    table = accounts[['account', 'owner', 'account_group', 'value', 'change', 'last_updated']].assign(
+        change=accounts['change'].map(signed_cents), owner=accounts['owner'].fillna(''))
     st.dataframe(
         table.style
         .format({'value': cents})
@@ -816,6 +816,7 @@ with net_worth_tab:
         height=table_height(table),
         column_config={
             'account': 'Account',
+            'owner': 'Owner',
             'account_group': 'Type',
             'value': 'Value',
             'change': '30-day Change',
