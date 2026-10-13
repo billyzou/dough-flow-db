@@ -136,33 +136,47 @@ def crosshair(df, x, series, y, y_format, order, monthly=False):
     return hover, rule
 
 
-def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, show_value=False, fmt=None,
-               tooltip=None, cursor=alt.Undefined):
-    # Name each series just past the chart's right edge instead of using a legend. Labels
-    # that would overlap are nudged apart (and kept under `top`), each with a dot in its
-    # series color beside it.
+def spread_labels(values, gap, floor=None, top=None):
+    # Positions as close to `values` (ascending) as possible while at least `gap` apart: labels that
+    # would overlap form a group centered on the mean of its values, kept within [floor, top]
+    def start(total, n):
+        s = total / n - (n - 1) * gap / 2
+        if top is not None:
+            s = min(s, top - (n - 1) * gap)
+        return s if floor is None else max(s, floor)
+
+    groups = []  # [sum of values, count]
+    for v in values:
+        groups.append([v, 1])
+        while len(groups) > 1 and start(*groups[-2]) + groups[-2][1] * gap > start(*groups[-1]):
+            total, n = groups.pop()
+            groups[-1][0] += total
+            groups[-1][1] += n
+    return [start(*g) + i * gap for g in groups for i in range(g[1])]
+
+
+def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, floor=None, show_value=False,
+               fmt=None, tooltip=None, cursor=alt.Undefined):
+    # Name each series just past the chart's right edge instead of using a legend, each with a dot
+    # in its series color beside it. Labels that would overlap are spread apart around their lines,
+    # and a thin connector joins each line's end to its label.
     ends = ends.sort_values(y).copy()
-    label_y, prev = [], None
-    for v in ends[y]:
-        prev = v if prev is None else max(v, prev + gap)
-        label_y.append(prev)
-    if top is not None and label_y[-1] > top:
-        label_y[-1] = top
-        for i in range(len(label_y) - 2, -1, -1):
-            label_y[i] = min(label_y[i], label_y[i + 1] - gap)
-    ends['label_y'] = label_y
+    ends['label_y'] = spread_labels(ends[y].tolist(), gap, floor, top)
     fmt = fmt or money
     ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {fmt(v)}') if show_value else '')
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
     if tooltip:
         chart = chart.encode(tooltip=tooltip)
-    dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=6, cursor=cursor).encode(
+    connector = chart.mark_rule(strokeWidth=1, opacity=0.6, x2Offset=14).encode(
+        y=alt.Y(f'{y}:Q', title=None, axis=alt.Axis(format=y_format)), y2='label_y:Q',
+        x2=alt.X2(x_enc.to_dict()['field']))
+    dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=14, cursor=cursor).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)))
     # label text stays neutral; the dot beside it carries the series color
-    text = chart.mark_text(align='left', dx=14, fontSize=12, cursor=cursor).encode(
+    text = chart.mark_text(align='left', dx=22, fontSize=12, cursor=cursor).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)), text='label_text:N', color=alt.value(OTHER))
     # no extra padding needed: fitting to the container width already makes room for the text
-    return [dot, text]
+    return [connector, dot, text]
 
 
 def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', fmt=None, category_help=False,
@@ -200,9 +214,10 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
     if tooltip:
         line, hit = line.encode(tooltip=tooltip), hit.encode(tooltip=tooltip)
     ends = df[df[x] == df[x].max()]
-    span = df[y].max() - (df[y].min() if not zero else min(df[y].min(), 0))
+    floor = df[y].min() if not zero else min(df[y].min(), 0)
+    span = df[y].max() - floor
     labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
-        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.06, show_value=True, fmt=fmt,
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.045, floor=floor, show_value=True, fmt=fmt,
         tooltip=tooltip, cursor='pointer')]
     # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
@@ -547,7 +562,7 @@ with net_worth_tab:
         )
         _, mix_rule = crosshair(by_group, 'date', 'account_group', 'share', '.0%', groups)
         mix_ends = stack_midpoints(by_group[by_group['date'] == latest_date], 'account_group', 'share', 'rank')
-        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.06, top=1)
+        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.045, top=1, floor=0)
         st.altair_chart(alt.layer(mix, mix_rule, *mix_labels), use_container_width=True)
 
     st.subheader('Accounts')
