@@ -160,12 +160,13 @@ def spread_labels(values, gap, floor=None, top=None):
 
 
 def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, floor=None, show_value=False,
-               tooltip=None, cursor=alt.Undefined):
+               tooltip=None, cursor=alt.Undefined, label_y=None):
     # Name each series just past the chart's right edge instead of using a legend, each with a dot
     # in its series color beside it. Labels that would overlap are spread apart around their lines,
-    # and a thin connector joins each line's end to its label.
+    # and a thin connector joins each line's end to its label. label_y: a column of positions already
+    # worked out, used instead.
     ends = ends.sort_values(y).copy()
-    ends['label_y'] = spread_labels(ends[y].tolist(), gap, floor, top)
+    ends['label_y'] = ends[label_y] if label_y else spread_labels(ends[y].tolist(), gap, floor, top)
     ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {money(v)}') if show_value else '')
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
     if tooltip:
@@ -262,15 +263,28 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
     line = base.mark_line(strokeWidth=3).transform_filter(shown)
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
         opacity=alt.condition(hovered, alt.value(1), alt.value(0))).transform_filter(shown)
-    ends = df[df[x] == df[x].max()]
+    ends = df[df[x] == df[x].max()].copy()
+    ends['iso_y'] = ends[y]
+    if prior:
+        # isolated, a line's label and its "Last year" label can collide: space the pair apart on the
+        # axis the isolated chart rescales to (0 up to that category's own max)
+        own_max = df.groupby(color)[[y, 'prior_plot']].max().max(axis=1)
+        ends['iso_prior_y'] = ends['prior_plot']
+        for i, row in ends[ends['prior_plot'].notna()].iterrows():
+            pair = sorted([(row[y], 'iso_y'), (row['prior_plot'], 'iso_prior_y')])
+            spread = spread_labels([v for v, _ in pair], own_max[row[color]] * 0.06, floor=0)
+            for (_, column), v in zip(pair, spread):
+                ends.loc[i, column] = v
     floor = df[y].min() if not zero else min(df[y].min(), 0)
     span = df[y].max() - floor
     labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.05, floor=floor, show_value=True,
         tooltip=label_tooltip, cursor='pointer')]
-    # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
+    # an isolated line is labeled at its own value (the nudging above spaced labels for every line),
+    # or moved just enough to clear its "Last year" label
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
-        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, tooltip=label_tooltip)]
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, tooltip=label_tooltip,
+        label_y='iso_y')]
     prior_layers = []
     if prior:
         # the isolated line's same months a year earlier, dashed, with its own end label. A month of net
@@ -279,10 +293,13 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         prior_shown = {'and': [{'param': 'pick', 'empty': False}, not_dropped, f'!{month_mode}']}
         has_prior = f'isValid(datum["{prior}"])'
         prior_ends = ends[ends[prior].notna()].assign(prior_text=lambda d: d[prior].map(lambda v: f'Last year · {money(v)}'))
-        prior_end = alt.Chart(prior_ends).encode(x=base.encoding.x, y=alt.Y('prior_plot:Q'))
+        prior_end = alt.Chart(prior_ends).encode(x=base.encoding.x, y=alt.Y('iso_prior_y:Q'))
         prior_layers = [
             base.mark_line(strokeWidth=2, strokeDash=[6, 4], opacity=0.7).encode(y=alt.Y('prior_plot:Q'))
             .transform_filter(has_prior).transform_filter(prior_shown),
+            prior_end.mark_rule(strokeWidth=1, opacity=0.6, x2Offset=14).encode(
+                y='prior_plot:Q', y2='iso_prior_y:Q', x2=alt.X2(base.encoding.x.to_dict()['field']),
+                color=alt.Color(f'{color}:N', scale=color_scale, legend=None)).transform_filter(prior_shown),
             prior_end.mark_point(filled=True, size=50, opacity=0.7, xOffset=14).encode(
                 color=alt.Color(f'{color}:N', scale=color_scale, legend=None)).transform_filter(prior_shown),
             prior_end.mark_text(align='left', dx=22, fontSize=13, color=OTHER).encode(text='prior_text:N')
