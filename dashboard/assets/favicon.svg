@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="98 107 316 316">
+  <g transform="translate(256 270) scale(0.86) translate(-256 -270)">
+    <!-- bread slice: crust -->
+    <path d="M136 432 Q114 432 114 410 V252 C76 242 66 192 90 158 C120 112 190 96 256 96 C322 96 392 112 422 158 C446 192 436 242 398 252 V410 Q398 432 376 432 Z" fill="#C2803A"/>
+    <!-- crumb -->
+    <path d="M152 414 Q134 414 134 396 V236 C100 228 92 196 110 170 C136 132 196 116 256 116 C316 116 376 132 402 170 C420 196 412 228 378 236 V396 Q378 414 360 414 Z" fill="#F6E3C1"/>
+    <!-- crumb holes -->
+    <g fill="#E8CC9C">
+      <ellipse cx="162" cy="196" rx="7" ry="5"/>
+      <ellipse cx="356" cy="200" rx="6" ry="4"/>
+      <ellipse cx="170" cy="380" rx="6" ry="4"/>
+      <ellipse cx="340" cy="384" rx="7" ry="5"/>
+      <ellipse cx="256" cy="392" rx="5" ry="4"/>
+    </g>
+    <!-- butter pat -->
+    <g transform="rotate(-8 256 196)">
+      <rect x="212" y="158" width="88" height="76" rx="14" fill="#FFD966"/>
+      <rect x="212" y="158" width="88" height="14" rx="7" fill="#FFE89A"/>
+    </g>
+    <!-- happy face -->
+    <circle cx="212" cy="300" r="11" fill="#4A2C17"/>
+    <circle cx="300" cy="300" r="11" fill="#4A2C17"/>
+    <circle cx="216" cy="296" r="3.5" fill="#fff"/>
+    <circle cx="304" cy="296" r="3.5" fill="#fff"/>
+    <ellipse cx="184" cy="324" rx="14" ry="8" fill="#F28B82" opacity="0.7"/>
+    <ellipse cx="328" cy="324" rx="14" ry="8" fill="#F28B82" opacity="0.7"/>
+    <!-- clenched grimace showing full gold grills -->
+    <rect x="220" y="314" width="72" height="30" rx="9" fill="#F2C230"/>
+    <rect x="220" y="314" width="72" height="5" rx="2" fill="#FFE58A"/>
+    <g stroke="#B8860B" stroke-width="2.5">
+      <line x1="220" y1="329" x2="292" y2="329"/>
+      <line x1="238" y1="314" x2="238" y2="344"/>
+      <line x1="256" y1="314" x2="256" y2="344"/>
+      <line x1="274" y1="314" x2="274" y2="344"/>
+    </g>
+    <rect x="220" y="314" width="72" height="30" rx="9" fill="none" stroke="#4A2C17" stroke-width="5"/>
+    <path d="M247 318 l2 4 4 2 -4 2 -2 4 -2 -4 -4 -2 4 -2 z" fill="#fff"/>
+  </g>
+  <!-- arm holding a cash stack to his face like a phone -->
+  <path d="M372 368 Q428 372 378 306" fill="none" stroke="#C2803A" stroke-width="13" stroke-linecap="round"/>
+  <g transform="translate(362 292) rotate(15)">
+    <rect x="4" y="-38" width="20" height="76" rx="4" fill="#5FA868" stroke="#2E6B3A" stroke-width="3"/>
+    <rect x="-10" y="-38" width="20" height="76" rx="4" fill="#6DB876" stroke="#2E6B3A" stroke-width="3"/>
+    <rect x="-24" y="-38" width="20" height="76" rx="4" fill="#8FD196" stroke="#2E6B3A" stroke-width="3"/>
+    <rect x="-26" y="-7" width="52" height="14" rx="2" fill="#F6E3C1"/>
+    <circle cx="16" cy="8" r="11" fill="#C2803A"/>
+  </g>
+</svg>

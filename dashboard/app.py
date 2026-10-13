@@ -16,8 +16,10 @@ import streamlit as st
 
 ICON = str(Path(__file__).parent / 'assets' / 'icon.png')
 DANCING_ICON = str(Path(__file__).parent / 'assets' / 'icon-dancing.gif')
+# Browser tab icon: just the toast, no tile, so it reads at 16px
+FAVICON = str(Path(__file__).parent / 'assets' / 'favicon.png')
 
-st.set_page_config(page_title='Dough Flow', page_icon=ICON, layout='wide')
+st.set_page_config(page_title='Dough Flow', page_icon=FAVICON, layout='wide')
 
 # Icon and title sit in the top bar like a site nav: the header goes transparent, the page
 # moves up into it (default top padding is 6rem), and the title shrinks to wordmark size
