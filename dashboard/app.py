@@ -202,7 +202,7 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
                month_bars=None):
     # category_help: series are categories; hovering a line or its label shows what it includes.
     # prior: column of each point's value a year earlier, drawn dashed for an isolated line.
-    # month_bars: rows of (month, name, total, prior, color) for every category. Clicking off the lines
+    # month_bars: rows of (month, name, total, prior) for every category. Clicking off the lines
     # then swaps the lines for that month's bars, in this same chart (Streamlit can't pass a layered
     # chart's clicks back to Python); double-click goes back.
     y_format = '$,.0f'
@@ -346,8 +346,9 @@ def month_bar_layers(bars, start, end, y_format):
     titles = alt.Chart(bars.drop_duplicates('month').assign(
         title=lambda d: d['month'].dt.strftime('%B %Y') + ' · double-click to go back')).transform_filter(selected)
     return [
-        chart.mark_bar(cornerRadius=3).encode(x='x0:T', x2='x1:T', y='total_plot:Q', y2=alt.datum(0),
-                                              color=alt.Color('color:N', scale=None), tooltip=tooltip),
+        # one color for every bar, so the grey prior-year line shows on all of them
+        chart.mark_bar(cornerRadius=3, color=PALETTE[0]).encode(x='x0:T', x2='x1:T', y='total_plot:Q', y2=alt.datum(0),
+                                                                tooltip=tooltip),
         # last year's spend in the same month, a grey line across the bar
         chart.mark_rule(strokeWidth=3, color=OTHER).encode(x='x0:T', x2='x1:T', y='prior_plot:Q', tooltip=tooltip)
         .transform_filter('isValid(datum.prior)'),
@@ -355,6 +356,11 @@ def month_bar_layers(bars, start, end, y_format):
         chart.mark_text(dy=14, fontSize=12, color=OTHER).encode(x='xc:T', y=alt.datum(0), text='name:N'),
         titles.mark_text(align='left', fontSize=14, fontWeight='bold').encode(
             x=alt.value(0), y=alt.value(-14), text='title:N'),
+        # legend for the grey line, top right
+        titles.mark_rule(strokeWidth=3, color=OTHER).encode(
+            x=alt.value({'expr': 'width - 160'}), x2=alt.value({'expr': 'width - 136'}), y=alt.value(-14)),
+        titles.mark_text(align='left', fontSize=13, color=OTHER, text='Same month last year').encode(
+            x=alt.value({'expr': 'width - 128'}), y=alt.value(-14)),
     ]
 
 
@@ -641,17 +647,23 @@ with this_year_tab:
         cash = pd.concat([flow.assign(type='Income', total=flow['income'], prior=flow['prior_income']),
                           flow.assign(type='Expense', total=flow['expense'], prior=flow['prior_expense'])])
         cash_x = month_axis(cash)
-        cash_colors = alt.Scale(domain=['Income', 'Expense', 'Prior Year'], range=PALETTE[:2] + [OTHER])
+        cash_colors = alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2])
         cash_tooltip = [alt.Tooltip('label:N', title='Month')] + [
             alt.Tooltip(f'{field}:Q', title=title, format='$,.0f') for field, title in (
                 ('income', 'Income'), ('expense', 'Expense'), ('net', 'Net'),
                 ('prior_income', 'Income last year'), ('prior_expense', 'Expense last year'), ('prior_net', 'Net last year'))]
         bars = alt.Chart(cash).mark_bar(cornerRadius=3).encode(
             x=cash_x, y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
-            color=alt.Color('type:N', title=None, scale=cash_colors, legend=alt.Legend(orient='top')),
+            color=alt.Color('type:N', title=None, scale=cash_colors, legend=alt.Legend(orient='right')),
             tooltip=cash_tooltip)
-        ticks = alt.Chart(cash).mark_tick(thickness=3).encode(
-            x=cash_x, y='prior:Q', color=alt.datum('Prior Year'), tooltip=cash_tooltip).transform_filter('isValid(datum.prior)')
+        # a separate (stroke dash) legend so Prior Year shows as a line, not a dot like the bar colors
+        # a rule across most of the month's column (a tick is a fill, so its legend line would be blank)
+        ticks = alt.Chart(cash).mark_rule(strokeWidth=3, color=OTHER).encode(
+            x=alt.X('label:O', sort=cash_x.to_dict()['sort'], bandPosition=0.1), x2=alt.X2('label', bandPosition=0.9),
+            y='prior:Q', tooltip=cash_tooltip,
+            strokeDash=alt.StrokeDash('prior_label:N', scale=alt.Scale(range=[[1, 0]]), legend=alt.Legend(
+                title=None, orient='right', symbolType='stroke', symbolStrokeColor=OTHER, symbolStrokeWidth=3)),
+        ).transform_calculate(prior_label="'Prior Year'").transform_filter('isValid(datum.prior)')
         st.altair_chart(alt.layer(bars, ticks).properties(height=400), use_container_width=True)
 
     st.subheader('Monthly Spend by Category', help=(
@@ -666,7 +678,6 @@ with this_year_tab:
     month_bars = history[history['month'].isin(months)].rename(columns={'category_name': 'name'})
     last_year_spend = history.set_index(['month', 'category_name'])['total']
     month_bars['prior'] = [last_year_spend.get((m - pd.DateOffset(years=1), c)) for m, c in zip(month_bars['month'], month_bars['name'])]
-    month_bars['color'] = month_bars['name'].map(category_colors).fillna(OTHER)
     st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors, category_help=True,
                                monthly=True, prior='prior', month_bars=month_bars).properties(height=400),
                     use_container_width=True)
