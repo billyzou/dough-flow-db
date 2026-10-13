@@ -231,9 +231,10 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         hover_label=lambda d: pd.to_datetime(d[x]).dt.strftime('%b %Y' if monthly else '%b %d, %Y'))
     if prior:
         df['prior_plot'] = df[prior].clip(lower=0)
+        df['prior_text'] = df[prior].map(lambda v: 'No data' if pd.isna(v) else money(v))
     hover_tooltip = ([alt.Tooltip('hover_label:N', title='Month' if monthly else 'Date')]
                      + (label_tooltip if category_help else [])
-                     + ([alt.Tooltip(f'{prior}:Q', title='Same month last year', format=y_format)] if prior else [])
+                     + ([alt.Tooltip('prior_text:N', title='Prior Year')] if prior else [])
                      + [alt.Tooltip(field=f'v_{s}', type='quantitative', format=y_format, title=str(s)) for s in colors])
     base = alt.Chart(df).encode(
         # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
@@ -275,7 +276,7 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
     ends = df[df[x] == df[x].max()].copy()
     ends['iso_y'] = ends[y]
     if prior:
-        # isolated, a line's label and its "Last year" label can collide: space the pair apart on the
+        # isolated, a line's label and its "Prior Year" label can collide: space the pair apart on the
         # axis the isolated chart rescales to (0 up to that category's own max)
         own_max = df.groupby(color)[[y, 'prior_plot']].max().max(axis=1)
         ends['iso_prior_y'] = ends['prior_plot']
@@ -301,7 +302,7 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         # would stretch the axis below 0
         prior_shown = {'and': [{'param': 'pick', 'empty': False}, not_dropped, f'!{month_mode}']}
         has_prior = f'isValid(datum["{prior}"])'
-        prior_ends = ends[ends[prior].notna()].assign(prior_text=lambda d: d[prior].map(lambda v: f'Last year · {money(v)}'))
+        prior_ends = ends[ends[prior].notna()].assign(prior_text=lambda d: d[prior].map(lambda v: f'Prior Year · {money(v)}'))
         prior_end = alt.Chart(prior_ends).encode(x=base.encoding.x, y=alt.Y('iso_prior_y:Q'))
         prior_layers = [
             base.mark_line(strokeWidth=2, strokeDash=[6, 4], opacity=0.7).encode(y=alt.Y('prior_plot:Q'))
@@ -350,10 +351,13 @@ def month_bar_layers(bars, start, end, y_format):
     selected = {'param': 'month', 'empty': False}
     tooltip = [alt.Tooltip('name:N', title='Category'), alt.Tooltip('includes:N', title='Includes'),
                alt.Tooltip('total:Q', title='Spend', format=y_format),
-               alt.Tooltip('prior:Q', title='Same month last year', format=y_format)]
+               alt.Tooltip('prior:Q', title='Prior Year', format=y_format)]
     chart = alt.Chart(bars).transform_filter(selected)
+    # history starts Jan 2025, so earlier months have no prior year to draw
+    has_prior = bars.groupby('month')['prior'].apply(lambda p: p.notna().any())
     titles = alt.Chart(bars.drop_duplicates('month').assign(
-        title=lambda d: d['month'].dt.strftime('%B %Y') + ' · double-click to go back')).transform_filter(selected)
+        title=lambda d: d['month'].dt.strftime('%B %Y') + ' · double-click to go back',
+        has_prior=lambda d: d['month'].map(has_prior))).transform_filter(selected)
     return [
         # one color for every bar, so the grey prior-year line shows on all of them
         chart.mark_bar(cornerRadius=3, color=PALETTE[0]).encode(x='x0:T', x2='x1:T', y='total_plot:Q', y2=alt.datum(0),
@@ -365,11 +369,14 @@ def month_bar_layers(bars, start, end, y_format):
         chart.mark_text(dy=14, fontSize=12, color=OTHER).encode(x='xc:T', y=alt.datum(0), text='name:N'),
         titles.mark_text(align='left', fontSize=14, fontWeight='bold').encode(
             x=alt.value(0), y=alt.value(-14), text='title:N'),
-        # legend for the grey line, top right
+        # legend for the grey line, top right (or a note when that month has no prior year)
         titles.mark_rule(strokeWidth=3, color=OTHER).encode(
-            x=alt.value({'expr': 'width - 160'}), x2=alt.value({'expr': 'width - 136'}), y=alt.value(-14)),
-        titles.mark_text(align='left', fontSize=13, color=OTHER, text='Same month last year').encode(
-            x=alt.value({'expr': 'width - 128'}), y=alt.value(-14)),
+            x=alt.value({'expr': 'width - 100'}), x2=alt.value({'expr': 'width - 76'}), y=alt.value(-14))
+        .transform_filter('datum.has_prior'),
+        titles.mark_text(align='left', fontSize=13, color=OTHER, text='Prior Year').encode(
+            x=alt.value({'expr': 'width - 68'}), y=alt.value(-14)).transform_filter('datum.has_prior'),
+        titles.mark_text(align='right', fontSize=13, color=OTHER, text='No Prior Year data for this month').encode(
+            x=alt.value({'expr': 'width'}), y=alt.value(-14)).transform_filter('!datum.has_prior'),
     ]
 
 
