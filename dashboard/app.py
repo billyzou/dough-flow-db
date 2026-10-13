@@ -137,7 +137,7 @@ def crosshair(df, x, series, y, y_format, order, monthly=False):
 
 
 def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, show_value=False, fmt=None,
-               tooltip=None):
+               tooltip=None, cursor=alt.Undefined):
     # Name each series just past the chart's right edge instead of using a legend. Labels
     # that would overlap are nudged apart (and kept under `top`), each with a dot in its
     # series color beside it.
@@ -156,10 +156,10 @@ def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, sho
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
     if tooltip:
         chart = chart.encode(tooltip=tooltip)
-    dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=6).encode(
+    dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=6, cursor=cursor).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)))
     # label text stays neutral; the dot beside it carries the series color
-    text = chart.mark_text(align='left', dx=14, fontSize=12).encode(
+    text = chart.mark_text(align='left', dx=14, fontSize=12, cursor=cursor).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)), text='label_text:N', color=alt.value(OTHER))
     # no extra padding needed: fitting to the container width already makes room for the text
     return [dot, text]
@@ -183,27 +183,32 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
     hover, rule = crosshair(df, x, color, y, y_format, colors, monthly)
     # Click a line or its label to show only that line; Option-click to hide it (several can be
     # hidden); double-click to bring them all back. Hidden lines leave the y scale, so the rest rescale.
-    pick = alt.selection_point(name='pick', fields=[color], on='click[!event.altKey]', clear='dblclick')
-    drop = alt.selection_point(name='drop', fields=[color], on='click[event.altKey]', toggle='true',
+    # only clicks on a line or label count: the crosshair's hover layer has no series, and picking it hid every line
+    on_series = f'event.item && event.item.datum && event.item.datum.{color} != null'
+    pick = alt.selection_point(name='pick', fields=[color], on=f'click[!event.altKey && {on_series}]', clear='dblclick')
+    drop = alt.selection_point(name='drop', fields=[color], on=f'click[event.altKey && {on_series}]', toggle='true',
                                clear='dblclick', empty=False)
     # written out because pick & ~drop loses drop's empty=False, which hides every line
     shown = {'and': [{'param': 'pick'}, {'not': {'param': 'drop', 'empty': False}}]}
     isolated = "length(data('pick_store'))"
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
         opacity=alt.condition(hover, alt.value(1), alt.value(0))).transform_filter(shown)
-    line = base.mark_line(strokeWidth=2).transform_filter(shown).add_params(pick, drop)
+    line = base.mark_line(strokeWidth=3, cursor='pointer').transform_filter(shown).add_params(pick, drop)
+    # a wide, nearly invisible copy underneath catches clicks a few pixels off the line (at opacity 0
+    # it isn't drawn, so it can't be clicked)
+    hit = base.mark_line(strokeWidth=14, opacity=0.001, cursor='pointer').transform_filter(shown).add_params(pick, drop)
     if tooltip:
-        line = line.encode(tooltip=tooltip)
+        line, hit = line.encode(tooltip=tooltip), hit.encode(tooltip=tooltip)
     ends = df[df[x] == df[x].max()]
     span = df[y].max() - (df[y].min() if not zero else min(df[y].min(), 0))
     labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.06, show_value=True, fmt=fmt,
-        tooltip=tooltip)]
+        tooltip=tooltip, cursor='pointer')]
     # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, fmt=fmt, tooltip=tooltip)]
     # the crosshair goes underneath, so clicks land on lines and labels
-    return alt.layer(rule, line, points, *labels, *picked_labels)
+    return alt.layer(rule, hit, line, points, *labels, *picked_labels)
 
 
 def stack_midpoints(df, series, value, rank):
