@@ -318,7 +318,7 @@ with this_month_tab:
     st.caption('Last 28 days')
     merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc')
     merchants.insert(0, 'rank', range(1, len(merchants) + 1))
-    merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Txns', 'share_of_spend': '% of spend'})
+    merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Transactions', 'share_of_spend': '% of spend'})
     # 10 at a time; the arrows on either side page through the rest
     last_page = max(0, (len(merchants) - 1) // 10)
     page = min(st.session_state.get('merchant_page', 0), last_page)
