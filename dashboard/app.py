@@ -294,8 +294,8 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.title('Dough Flow')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, this_month_tab, transactions_tab, trends_tab = st.tabs(
-    ['Net Worth', 'This Month', 'Transactions', 'Trends'])
+net_worth_tab, this_month_tab, this_year_tab, transactions_tab = st.tabs(
+    ['Net Worth', 'This Month', 'This Year', 'Transactions'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -428,8 +428,8 @@ with transactions_tab:
         },
     )
 
-# ---------- Trends: where is the money going over time? ----------
-with trends_tab:
+# ---------- This Year: where is the money going over time? ----------
+with this_year_tab:
     left, right = st.columns(2)
 
     with left:
@@ -612,6 +612,6 @@ with net_worth_tab:
             f'{len(stale)} accounts have no balance in over 30 days and are carried forward at their last value: '
             f'{money(stale["value"].sum())} in total. Update them with scripts/update_balance.py.'))
 
-for i, tab in enumerate((net_worth_tab, this_month_tab, transactions_tab, trends_tab)):
+for i, tab in enumerate((net_worth_tab, this_month_tab, this_year_tab, transactions_tab)):
     with tab, st.container(horizontal_alignment='center', key=f'dancer-{i}'):
         st.image(DANCING_ICON)
