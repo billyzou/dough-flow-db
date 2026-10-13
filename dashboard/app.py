@@ -59,8 +59,8 @@ st.markdown("""
 [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
 /* breathing room between each tab's last chart/table and the dancing bread */
 [class*="st-key-dancer-"] { margin-top: 3rem; }
-/* line charts: anywhere on the plot clicks the nearest line (see line_chart) */
-.line_targets_voronoi path { cursor: pointer; }
+/* line charts with month_bars: clicking off the lines picks a month (see line_chart) */
+.month_targets_voronoi path { cursor: pointer; }
 /* html_table(): looks like st.dataframe, plus hover tooltips. Grays mix with the text color so
    they work in light and dark themes */
 .dough-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px;
@@ -181,9 +181,29 @@ def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, flo
     return [connector, dot, text]
 
 
-def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False,
-               monthly=False):
-    # category_help: series are categories; hovering a line or its label shows what it includes
+def hit_points(df, x, y, color, per_segment):
+    # Invisible circles along each line, its click and hover area. Lines with few points get extra
+    # circles between them so the gaps are covered; each carries its nearest data point's fields
+    # (hover_x included), placed at the interpolated position.
+    rows = []
+    for _, g in df.sort_values(x).groupby(color):
+        g = g.reset_index(drop=True)
+        for i in range(len(g)):
+            rows.append(g.iloc[i].to_dict())
+            for k in range(1, per_segment if i + 1 < len(g) else 1):
+                t = k / per_segment
+                rows.append(g.iloc[i if t < 0.5 else i + 1].to_dict() | {
+                    x: g[x][i] + (g[x][i + 1] - g[x][i]) * t, y: g[y][i] + (g[y][i + 1] - g[y][i]) * t})
+    return pd.DataFrame(rows)
+
+
+def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False, monthly=False, prior=None,
+               month_bars=None):
+    # category_help: series are categories; hovering a line or its label shows what it includes.
+    # prior: column of each point's value a year earlier, drawn dashed for an isolated line.
+    # month_bars: rows of (month, name, total, prior, color) for every category. Clicking off the lines
+    # then swaps the lines for that month's bars, in this same chart (Streamlit can't pass a layered
+    # chart's clicks back to Python); double-click goes back.
     y_format = '$,.0f'
     color_scale = alt.Scale(domain=list(colors), range=list(colors.values()))
     label_tooltip = alt.value(None)  # otherwise Streamlit shows every field of the label row
@@ -193,60 +213,132 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
     # each point also carries every series' value at its x, so one tooltip can list them all
     wide = df.pivot_table(index=x, columns=color, values=y, aggfunc='sum')
     wide.columns = [f'v_{c}' for c in wide.columns]
-    df = df.merge(wide.reset_index(), on=x)
-    hover_tooltip = ([alt.Tooltip(f'{x}:T', title='Month' if monthly else 'Date', format='%b %Y' if monthly else '%b %d, %Y')]
+    # hover_x: the data point a hover or month click is about (hit_points sit between data points).
+    # Text, not a date: Vega-Lite parses a date field only in the layers that encode it as one, so a
+    # date key wouldn't match between layers
+    df = df.merge(wide.reset_index(), on=x).assign(
+        hover_x=lambda d: pd.to_datetime(d[x]).dt.strftime('%Y-%m-%d'),
+        hover_label=lambda d: pd.to_datetime(d[x]).dt.strftime('%b %Y' if monthly else '%b %d, %Y'))
+    if prior:
+        df['prior_plot'] = df[prior].clip(lower=0)
+    hover_tooltip = ([alt.Tooltip('hover_label:N', title='Month' if monthly else 'Date')]
                      + (label_tooltip if category_help else [])
+                     + ([alt.Tooltip(f'{prior}:Q', title='Same month last year', format=y_format)] if prior else [])
                      + [alt.Tooltip(field=f'v_{s}', type='quantitative', format=y_format, title=str(s)) for s in colors])
     base = alt.Chart(df).encode(
         # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
         x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format, values=[
-            alt.DateTime(year=d.year, month=d.month, date=1) for d in sorted(df[x].unique())] if monthly else alt.Undefined)),
+            alt.DateTime(year=d.year, month=d.month, date=1) for d in sorted(df[x].unique())] if monthly else alt.Undefined,
+            # the month bars put category names there instead
+            labelExpr=f"length(data('month_store')) ? '' : timeFormat(datum.value, '{x_format}')"
+            if month_bars is not None else alt.Undefined)),
         y=alt.Y(f'{y}:Q', title=None, scale=alt.Scale(zero=zero), axis=alt.Axis(format=y_format)),
         color=alt.Color(f'{color}:N', title=None, scale=color_scale, legend=None),
     )
-    # Everything keys off the point nearest the pointer, anywhere on the plot: hovering shows a hairline,
-    # a dot on each line and one tooltip; clicking shows only the nearest line, Option-click hides it
-    # (several can be hidden), double-click brings them all back. Hidden lines leave the y scale, so the
-    # rest rescale. Labels can be clicked the same way.
-    hover = alt.selection_point(name='hover', fields=[x], nearest=True, on='pointerover', clear='pointerout',
-                                empty=False)
-    pick = alt.selection_point(name='pick', fields=[color], nearest=True, on='click[!event.altKey]', clear='dblclick')
-    drop = alt.selection_point(name='drop', fields=[color], nearest=True, on='click[event.altKey]', toggle='true',
+    # Hovering anywhere shows a hairline, a dot on each line and one tooltip. Clicking a line or its
+    # label shows only that line, Option-click hides it (several can be hidden), double-click brings
+    # them all back; hidden lines leave the y scale, so the rest rescale.
+    # Vega-Lite doesn't limit a selection's events to its own layers, so each click filter checks what
+    # was clicked: line hit points and labels carry the series, the hover area's items don't.
+    on_series = f'event.item && event.item.datum && event.item.datum.{color} != null'
+    hover = alt.selection_point(name='hover', fields=['hover_x'], nearest=True, on='pointerover',
+                                clear='pointerout', empty=False)
+    # a nearest selection only listens to its own hover area, which the line hit points cover, so
+    # they set the hover through a second selection
+    hover_hit = alt.selection_point(name='hover_hit', fields=['hover_x'], clear='pointerout', empty=False,
+                                    on='pointerover[event.item && event.item.datum && event.item.datum.hover_x != null]')
+    hovered = ("(length(data('hover_store')) && vlSelectionTest('hover_store', datum)) || "
+               "(length(data('hover_hit_store')) && vlSelectionTest('hover_hit_store', datum))")
+    pick = alt.selection_point(name='pick', fields=[color], on=f'click[!event.altKey && {on_series}]', clear='dblclick')
+    drop = alt.selection_point(name='drop', fields=[color], on=f'click[event.altKey && {on_series}]', toggle='true',
                                clear='dblclick', empty=False)
-    # labels need their own (not nearest) copies: a nearest selection gives every layer it's on a
-    # hover area over the whole plot, and the labels' one would cover the targets'
-    pick_label = alt.selection_point(name='pick_label', fields=[color], on='click[!event.altKey]', clear='dblclick')
-    drop_label = alt.selection_point(name='drop_label', fields=[color], on='click[event.altKey]', toggle='true',
-                                     clear='dblclick', empty=False)
-    # shown: picked in either (or nothing picked anywhere), and hidden in neither. Written out
-    # because & and ~ on selections lose empty=False
-    shown = {'and': [
-        {'or': [{'and': [{'param': 'pick'}, {'param': 'pick_label'}]},
-                {'param': 'pick', 'empty': False}, {'param': 'pick_label', 'empty': False}]},
-        {'not': {'or': [{'param': 'drop', 'empty': False}, {'param': 'drop_label', 'empty': False}]}},
-    ]}
-    isolated = "(length(data('pick_store')) || length(data('pick_label_store')))"
+    # written out because pick & ~drop loses drop's empty=False, which hides every line
+    not_dropped = {'not': {'param': 'drop', 'empty': False}}
+    month_mode = "length(data('month_store'))" if month_bars is not None else 'false'
+    shown = {'and': [{'param': 'pick'}, not_dropped, f'!{month_mode}']}
+    isolated = "length(data('pick_store'))"
     rule = alt.Chart(df).mark_rule(color=OTHER).encode(
-        x=base.encoding.x, opacity=alt.condition(hover, alt.value(0.8), alt.value(0))).transform_filter(shown)
+        x=base.encoding.x, opacity=alt.condition(hovered, alt.value(0.8), alt.value(0))).transform_filter(shown)
     line = base.mark_line(strokeWidth=3).transform_filter(shown)
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
-        opacity=alt.condition(hover, alt.value(1), alt.value(0))).transform_filter(shown)
-    # invisible points on top that the hover and clicks are taken from (named for the pointer cursor CSS)
-    targets = base.mark_point(opacity=0).encode(tooltip=hover_tooltip).transform_filter(shown).add_params(
-        hover, pick, drop).properties(name='line_targets')
+        opacity=alt.condition(hovered, alt.value(1), alt.value(0))).transform_filter(shown)
     ends = df[df[x] == df[x].max()]
     floor = df[y].min() if not zero else min(df[y].min(), 0)
     span = df[y].max() - floor
-    labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick_label, drop_label) for layer in end_labels(
+    labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.05, floor=floor, show_value=True,
         tooltip=label_tooltip, cursor='pointer')]
     # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, tooltip=label_tooltip)]
-    # labels sit past the plot's right edge, outside the targets' hover area, so they still get their own clicks.
+    prior_layers = []
+    if prior:
+        # the isolated line's same months a year earlier, dashed, with its own end label. A month of net
+        # refunds is drawn at 0 (the tooltip keeps the real value): even hidden, a negative value
+        # would stretch the axis below 0
+        prior_shown = {'and': [{'param': 'pick', 'empty': False}, not_dropped, f'!{month_mode}']}
+        has_prior = f'isValid(datum["{prior}"])'
+        prior_ends = ends[ends[prior].notna()].assign(prior_text=lambda d: d[prior].map(lambda v: f'Last year · {money(v)}'))
+        prior_end = alt.Chart(prior_ends).encode(x=base.encoding.x, y=alt.Y('prior_plot:Q'))
+        prior_layers = [
+            base.mark_line(strokeWidth=2, strokeDash=[6, 4], opacity=0.7).encode(y=alt.Y('prior_plot:Q'))
+            .transform_filter(has_prior).transform_filter(prior_shown),
+            prior_end.mark_point(filled=True, size=50, opacity=0.7, xOffset=14).encode(
+                color=alt.Color(f'{color}:N', scale=color_scale, legend=None)).transform_filter(prior_shown),
+            prior_end.mark_text(align='left', dx=22, fontSize=13, color=OTHER).encode(text='prior_text:N')
+            .transform_filter(prior_shown),
+        ]
+    # the hover area: invisible points with a nearest-point area over the whole plot
+    targets = base.mark_point(opacity=0).encode(tooltip=hover_tooltip).transform_filter(shown).add_params(hover)
+    bar_layers = []
+    if month_bars is not None:
+        month = alt.selection_point(name='month', fields=['hover_x'], nearest=True, clear='dblclick',
+                                    on=f'click[!event.altKey && !({on_series}) && !{month_mode}]')
+        targets = targets.add_params(month).properties(name='month_targets')  # named for the pointer cursor CSS
+        bar_layers = month_bar_layers(month_bars, df[x].min(), df[x].max(), y_format)
+    # each line's click area, on top (at opacity 0 a mark isn't drawn, so it can't be clicked)
+    hits = alt.Chart(hit_points(df, x, y, color, max(1, 240 // df[x].nunique()))).mark_circle(
+        size=220, opacity=0.001, cursor='pointer').encode(
+        x=base.encoding.x, y=base.encoding.y, tooltip=hover_tooltip).transform_filter(shown).add_params(pick, drop, hover_hit)
+    # labels sit past the plot's right edge, outside the hover area, so they still get their own clicks.
     # extra right padding: fitting to the container leaves the end of the longest label clipped
-    return alt.layer(rule, line, points, *labels, *picked_labels, targets).properties(
-        padding={'left': 5, 'top': 5, 'bottom': 5, 'right': 16})
+    return alt.layer(rule, line, *prior_layers, points, *labels, *picked_labels, *bar_layers, targets, hits).properties(
+        padding={'left': 5, 'top': 24 if month_bars is not None else 5, 'bottom': 5, 'right': 16})
+
+
+def month_bar_layers(bars, start, end, y_format):
+    # One month's categories as bars across the line chart's own axes: each bar gets a slot of the
+    # date range (x is still the month scale) and its height in the same $ scale. Shown only while
+    # 'month' is selected.
+    bars = bars.sort_values(['month', 'total'], ascending=[True, False]).copy()
+    bars['i'] = bars.groupby('month').cumcount()
+    slot = (end - start) / bars.groupby('month')['name'].transform('count')
+    bars['x0'] = start + slot * (bars['i'] + 0.15)
+    bars['x1'] = start + slot * (bars['i'] + 0.85)
+    bars['xc'] = start + slot * (bars['i'] + 0.5)
+    bars['hover_x'] = bars['month'].dt.strftime('%Y-%m-%d')  # matches line_chart's hover_x
+    bars['value'] = bars['total'].map(money)
+    bars['total_plot'] = bars['total'].clip(lower=0)
+    bars['prior_plot'] = bars['prior'].clip(lower=0)
+    bars['includes'] = bars['name'].map(CATEGORY_HELP).fillna('')
+    selected = {'param': 'month', 'empty': False}
+    tooltip = [alt.Tooltip('name:N', title='Category'), alt.Tooltip('includes:N', title='Includes'),
+               alt.Tooltip('total:Q', title='Spend', format=y_format),
+               alt.Tooltip('prior:Q', title='Same month last year', format=y_format)]
+    chart = alt.Chart(bars).transform_filter(selected)
+    titles = alt.Chart(bars.drop_duplicates('month').assign(
+        title=lambda d: d['month'].dt.strftime('%B %Y') + ' · double-click to go back')).transform_filter(selected)
+    return [
+        chart.mark_bar(cornerRadius=3).encode(x='x0:T', x2='x1:T', y='total_plot:Q', y2=alt.datum(0),
+                                              color=alt.Color('color:N', scale=None), tooltip=tooltip),
+        # last year's spend in the same month, a grey line across the bar
+        chart.mark_rule(strokeWidth=3, color=OTHER).encode(x='x0:T', x2='x1:T', y='prior_plot:Q', tooltip=tooltip)
+        .transform_filter('isValid(datum.prior)'),
+        chart.mark_text(dy=-8, fontSize=13, color=OTHER).encode(x='xc:T', y='total_plot:Q', text='value:N'),
+        chart.mark_text(dy=14, fontSize=12, color=OTHER).encode(x='xc:T', y=alt.datum(0), text='name:N'),
+        titles.mark_text(align='left', fontSize=14, fontWeight='bold').encode(
+            x=alt.value(0), y=alt.value(-14), text='title:N'),
+    ]
 
 
 def stack_midpoints(df, series, value, rank):
@@ -483,8 +575,6 @@ with this_year_tab:
     trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
 
     domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
-    TOP_CATEGORIES_HELP = (f'Shows the {MAX_CATEGORIES} largest categories; the rest are grouped as Other '
-                           f'(the tables list every category).\n\n{LINE_CLICK_HELP}')
     category_colors = dict(zip(domain, PALETTE[:len(top)] + [OTHER]))
     # a month with no spend in a category is 0, not a gap in its line
     trends = (trends.set_index(['month', 'category'])
@@ -492,43 +582,77 @@ with this_year_tab:
                        fill_value=0)
               .reset_index())
     trends['month'] = pd.to_datetime(trends['month'])
+    months = sorted(trends['month'].unique())
+    a_year_before = [m - pd.DateOffset(years=1) for m in months]
 
-    total_col, category_col = st.columns(2)
+    # every month's spend by category, for prior-year values (category_trends only covers the last 12 months)
+    history = query('select month, category_name, total from gold.monthly_spending')
+    history['month'] = pd.to_datetime(history['month'])
+
+    total_col, cash_col = st.columns(2)
     with total_col:
         st.subheader('Monthly Total Spend', help='Every category combined, transfers excluded. Prior Year is the '
                      'same month a year earlier (the current month compares a partial month with a full one).')
-        spend_by_month = query('select month, sum(total) as total from gold.monthly_spending group by 1')
-        spend_by_month = spend_by_month.set_index(pd.to_datetime(spend_by_month['month']))['total']
-        months = sorted(trends['month'].unique())
+        spend_by_month = history.groupby('month')['total'].sum()
         monthly_total = pd.concat([
             pd.DataFrame({'month': months, 'series': 'Total Spend',
                           'total': spend_by_month.reindex(months).fillna(0).values}),
             # history starts Jan 2025, so earlier months have no prior year and are left off
             pd.DataFrame({'month': months, 'series': 'Prior Year',
-                          'total': spend_by_month.reindex([m - pd.DateOffset(years=1) for m in months]).values}).dropna(),
+                          'total': spend_by_month.reindex(a_year_before).values}).dropna(),
         ])
         st.altair_chart(line_chart(monthly_total, 'month', 'total', 'series', '%b %Y',
                                    {'Total Spend': PALETTE[0], 'Prior Year': OTHER},
                                    monthly=True).properties(height=400), use_container_width=True)
-    with category_col:
-        st.subheader('Monthly Spend by Category', help=TOP_CATEGORIES_HELP)
-        st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors,
-                                   category_help=True, monthly=True).properties(height=400), use_container_width=True)
 
-    st.subheader('Net Cash Flow', help="Income minus spending. Transfers between your own accounts are left out of both, "
-                 "so they aren't counted twice.")
-    cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
-    st.altair_chart(
-        alt.Chart(cash).mark_bar(cornerRadius=4).encode(
-            x=month_axis(cash),
-            xOffset='type:N',
-            y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
-            color=alt.Color('type:N', title=None, scale=alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2]),
-                            legend=alt.Legend(orient='right')),
-            tooltip=[alt.Tooltip('label:N', title='Month'), 'type:N', alt.Tooltip('total:Q', format='$,.0f')],
-        ).properties(height=400),
-        use_container_width=True,
-    )
+    with cash_col:
+        st.subheader('Net Cash Flow', help="Income (up) and spending (down) each month. Transfers between your own "
+                     "accounts are left out of both, so they aren't counted twice. Grey ticks are the same month a "
+                     "year earlier.")
+        cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
+        cash['month'] = pd.to_datetime(cash['month'])
+        by_type = cash.pivot_table(index='month', columns='type', values='total', aggfunc='sum')
+        by_type = by_type.reindex(columns=['Income', 'Expense']).fillna(0)
+        this_year = by_type.reindex(months).fillna(0)
+        last_year = by_type.reindex(a_year_before)  # NaN before history starts
+        flow = pd.DataFrame({'month': months})
+        for name, frame in (('', this_year), ('prior_', last_year)):
+            flow[f'{name}income'] = frame['Income'].values
+            flow[f'{name}expense'] = frame['Expense'].values
+            flow[f'{name}net'] = flow[f'{name}income'] + flow[f'{name}expense']
+        # income up and expense down at the same month, so each month is one column
+        cash = pd.concat([flow.assign(type='Income', total=flow['income'], prior=flow['prior_income']),
+                          flow.assign(type='Expense', total=flow['expense'], prior=flow['prior_expense'])])
+        cash_x = month_axis(cash)
+        cash_colors = alt.Scale(domain=['Income', 'Expense', 'Prior Year'], range=PALETTE[:2] + [OTHER])
+        cash_tooltip = [alt.Tooltip('label:N', title='Month')] + [
+            alt.Tooltip(f'{field}:Q', title=title, format='$,.0f') for field, title in (
+                ('income', 'Income'), ('expense', 'Expense'), ('net', 'Net'),
+                ('prior_income', 'Income last year'), ('prior_expense', 'Expense last year'), ('prior_net', 'Net last year'))]
+        bars = alt.Chart(cash).mark_bar(cornerRadius=3).encode(
+            x=cash_x, y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
+            color=alt.Color('type:N', title=None, scale=cash_colors, legend=alt.Legend(orient='top')),
+            tooltip=cash_tooltip)
+        ticks = alt.Chart(cash).mark_tick(thickness=3).encode(
+            x=cash_x, y='prior:Q', color=alt.datum('Prior Year'), tooltip=cash_tooltip).transform_filter('isValid(datum.prior)')
+        st.altair_chart(alt.layer(bars, ticks).properties(height=400), use_container_width=True)
+
+    st.subheader('Monthly Spend by Category', help=(
+        f'Shows the {MAX_CATEGORIES} largest categories; the rest are grouped as Other (the tables list every '
+        'category).\n\nClick a line or its label to show only that category, with the same months last year '
+        'dashed. Click anywhere else to see every category for that month as bars. Option-click hides a line '
+        '(you can hide several); double-click brings them all back.'))
+    grouped = history.assign(category=history['category_name'].where(history['category_name'].isin(top), 'Other'))
+    grouped = grouped.groupby(['month', 'category'])['total'].sum()
+    trends['prior'] = [grouped.get((m - pd.DateOffset(years=1), c)) for m, c in zip(trends['month'], trends['category'])]
+    # every category (not grouped into Other) of each month, for the bars a month click shows
+    month_bars = history[history['month'].isin(months)].rename(columns={'category_name': 'name'})
+    last_year_spend = history.set_index(['month', 'category_name'])['total']
+    month_bars['prior'] = [last_year_spend.get((m - pd.DateOffset(years=1), c)) for m, c in zip(month_bars['month'], month_bars['name'])]
+    month_bars['color'] = month_bars['name'].map(category_colors).fillna(OTHER)
+    st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors, category_help=True,
+                               monthly=True, prior='prior', month_bars=month_bars).properties(height=400),
+                    use_container_width=True)
 
 # ---------- Net Worth: how are my assets growing? ----------
 with net_worth_tab:
