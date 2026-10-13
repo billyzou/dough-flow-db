@@ -173,9 +173,8 @@ def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, flo
     dot = chart.mark_point(filled=True, size=50, opacity=1, xOffset=14, cursor=cursor).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)))
     # label text stays neutral; the dot beside it carries the series color
-    text = chart.mark_text(align='left', dx=22, fontSize=12, cursor=cursor).encode(
+    text = chart.mark_text(align='left', dx=22, fontSize=13, cursor=cursor).encode(
         y=alt.Y('label_y:Q', title=None, axis=alt.Axis(format=y_format)), text='label_text:N', color=alt.value(OTHER))
-    # no extra padding needed: fitting to the container width already makes room for the text
     return [connector, dot, text]
 
 
@@ -217,13 +216,15 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
     floor = df[y].min() if not zero else min(df[y].min(), 0)
     span = df[y].max() - floor
     labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick, drop) for layer in end_labels(
-        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.045, floor=floor, show_value=True, fmt=fmt,
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.05, floor=floor, show_value=True, fmt=fmt,
         tooltip=tooltip, cursor='pointer')]
     # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
         ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, fmt=fmt, tooltip=tooltip)]
     # the crosshair goes underneath, so clicks land on lines and labels
-    return alt.layer(rule, hit, line, points, *labels, *picked_labels)
+    # extra right padding: fitting to the container leaves the end of the longest label clipped
+    return alt.layer(rule, hit, line, points, *labels, *picked_labels).properties(
+        padding={'left': 5, 'top': 5, 'bottom': 5, 'right': 16})
 
 
 def stack_midpoints(df, series, value, rank):
@@ -562,7 +563,7 @@ with net_worth_tab:
         )
         _, mix_rule = crosshair(by_group, 'date', 'account_group', 'share', '.0%', groups)
         mix_ends = stack_midpoints(by_group[by_group['date'] == latest_date], 'account_group', 'share', 'rank')
-        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.045, top=1, floor=0)
+        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.05, top=1, floor=0)
         st.altair_chart(alt.layer(mix, mix_rule, *mix_labels), use_container_width=True)
 
     st.subheader('Accounts')
