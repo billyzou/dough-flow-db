@@ -13,7 +13,7 @@ Built as a hands-on DE learning project: the goal is understanding the plumbing,
 ## High-level pipeline
 
 ```
-Plaid API  (production, 4 banks enrolled)
+Plaid API  (production, 7 logins across 6 institutions)
     │
     ▼
 scripts/ingest_plaid.py   ← Airflow triggers this daily at 10am UTC
@@ -28,7 +28,7 @@ dbt  (bronze → silver facts/dims → gold aggregates)
 Streamlit  (self-hosted, spending dashboard)
 ```
 
-Everything runs in Docker Compose on a home Ubuntu server.
+Everything runs in Docker Compose (OrbStack) on a Mac mini home server.
 
 ---
 
@@ -80,11 +80,10 @@ Everything runs in Docker Compose on a home Ubuntu server.
                     ┌──────────────────────────────▼──────────────────┐
                     │  SERVING  (Streamlit · dashboard/app.py)         │
                     │                                                  │
-                    │  YTD / MTD cumulative spend                      │
-                    │  spend by category (YTD, MTD)                    │
-                    │  monthly trend by category                       │
-                    │  net cash flow                                   │
-                    │  top merchants                                   │
+                    │  Net Worth     balances by account and type      │
+                    │  This Month    pace vs usual, top merchants      │
+                    │  This Year     YTD, monthly spend, cash flow     │
+                    │  Transactions  searchable list                   │
                     └─────────────────────────────────────────────────┘
 ```
 
@@ -99,7 +98,7 @@ Everything runs in Docker Compose on a home Ubuntu server.
 | Storage | PostgreSQL 14 |
 | Transformation | dbt |
 | Visualization | Streamlit |
-| Infrastructure | Docker Compose, home server (Ubuntu) |
+| Infrastructure | Docker Compose (OrbStack), Mac mini home server |
 
 ---
 
@@ -123,7 +122,14 @@ Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and 
 - **Legacy as a source** — the CSV files behind the 2025 backfill are gone, so the pre-medallion tables were frozen into `bronze.legacy_*`. Silver uses them only where Plaid has nothing.
 - **Observability table** — every DAG run writes a row to `pipeline_runs` with row counts, error messages, and runtime. No external monitoring needed at this scale.
 - **Plaid over alternatives** — evaluated Teller (no SOC2, small company risk) and direct scraping. Plaid is SOC2 Type II + ISO 27001; Chase and Wealthfront use OAuth so no credentials are handed over.
+- **Display names live in the account registry** — `bronze.accounts.name` is set from Plaid the first time an account is seen and never overwritten, so renaming a row there renames the account everywhere. Owners are set there too.
 - **Silver tables, gold views** — silver facts and dims are rebuilt by each dbt run; gold views stay cheap at this size. `update_balance.py` rebuilds the balance models itself so hand-entered balances show right away.
+
+---
+
+## Dashboard
+
+Four tabs: **Net Worth**, **This Month**, **This Year** and **Transactions**. Category names, column headers and chart titles have hover tooltips explaining what they include. On line charts, click a line or its label to show only that line (Option-click hides it, double-click resets). On Monthly Spend by Category, an isolated category also shows its prior year dashed, and clicking off the lines shows every category for that month as bars.
 
 ---
 
@@ -131,7 +137,8 @@ Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and 
 
 ```
 ├── dashboard/
-│   └── app.py                # Streamlit dashboard (reads gold live)
+│   ├── app.py                # Streamlit dashboard (reads gold live)
+│   └── assets/               # Logo, browser tab icon
 ├── dags/
 │   ├── ingest_plaid.py       # Airflow DAG: daily ingest
 │   └── dbt_run.py            # dbt seed + run, after the ingest DAG
@@ -160,4 +167,4 @@ Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and 
 
 ## Enrolled institutions
 
-Four institutions enrolled via Plaid production credentials (mix of checking, credit, and investment accounts). One investment account provider added manually — Plaid blocks dev-tier access for that institution; alternatives evaluated and rejected on security grounds.
+Six institutions (seven logins) enrolled via Plaid production credentials: a mix of checking, savings, credit, brokerage and retirement accounts. A few accounts Plaid can't reach (e.g. crypto) are entered by hand each month with `scripts/update_balance.py`.
