@@ -256,11 +256,13 @@ def stack_midpoints(df, series, value, rank):
     return df
 
 
-def money_table(df, columns, sort_by, help=None):
+def money_table(df, columns, sort_by, help=None, total=True):
     df = df[list(columns)].sort_values(sort_by, ascending=False)
-    total = df.drop(columns=df.columns[0]).sum().to_frame().T
-    total.insert(0, df.columns[0], 'Total')
-    df = pd.concat([df, total], ignore_index=True).rename(columns=columns)
+    if total:
+        totals = df.drop(columns=df.columns[0]).sum().to_frame().T
+        totals.insert(0, df.columns[0], 'Total')
+        df = pd.concat([df, totals], ignore_index=True)
+    df = df.rename(columns=columns)
     html_table(df, {c: '${:,.0f}' for c in df.columns[1:]}, help=help)
 
 
@@ -472,7 +474,7 @@ with this_year_tab:
     with right:
         st.subheader('YTD Spend by Category')
         money_table(categories, {'category_name': 'Category', 'this_year': 'This Year', 'last_year': 'Prior Year'},
-                    'this_year', help={'Prior Year': 'Last year, Jan 1 through the same date'})
+                    'this_year', help={'Prior Year': 'Last year, Jan 1 through the same date'}, total=False)
 
     trends = query('select month, category_name, total from gold.category_trends')
     ranked = trends.groupby('category_name')['total'].sum().sort_values(ascending=False).index.tolist()
