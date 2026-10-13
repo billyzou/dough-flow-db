@@ -382,7 +382,7 @@ with this_month_tab:
     st.caption('Last 28 days')
     merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc')
     merchants.insert(0, 'rank', range(1, len(merchants) + 1))
-    merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Transactions', 'share_of_spend': '% of spend'})
+    merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Transactions', 'share_of_spend': '% of Spend'})
     # 10 at a time; the arrows on either side page through the rest
     last_page = max(0, (len(merchants) - 1) // 10)
     page = min(st.session_state.get('merchant_page', 0), last_page)
@@ -393,8 +393,8 @@ with this_month_tab:
                     on_click=lambda: st.session_state.update(merchant_page=page + 1))
     shown = merchants.iloc[page * 10:(page + 1) * 10]
     with table_col:
-        html_table(shown, {'Total': '${:,.2f}', '% of spend': '{:.1%}'},
-                   help={'% of spend': 'Share of all spending in the last 28 days, including charges with no merchant'})
+        html_table(shown, {'Total': '${:,.2f}', '% of Spend': '{:.1%}'},
+                   help={'% of Spend': 'Share of all spending in the last 28 days, including charges with no merchant'})
     table_col.caption(f'{page * 10 + 1}–{page * 10 + len(shown)} of {len(merchants)}')
 
 # ---------- Transactions: what's behind the numbers? ----------
