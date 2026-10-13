@@ -491,9 +491,16 @@ with this_year_tab:
               .reset_index())
     trends['month'] = pd.to_datetime(trends['month'])
 
-    st.subheader('Monthly Spend by Category', help=TOP_CATEGORIES_HELP)
-    st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors,
-                               category_help=True, monthly=True).properties(height=400), use_container_width=True)
+    total_col, category_col = st.columns(2)
+    with total_col:
+        st.subheader('Monthly Total Spend', help='Every category combined, transfers excluded')
+        monthly_total = trends.groupby('month', as_index=False)['total'].sum().assign(series='Total spend')
+        st.altair_chart(line_chart(monthly_total, 'month', 'total', 'series', '%b %Y', {'Total spend': PALETTE[0]},
+                                   monthly=True).properties(height=400), use_container_width=True)
+    with category_col:
+        st.subheader('Monthly Spend by Category', help=TOP_CATEGORIES_HELP)
+        st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors,
+                                   category_help=True, monthly=True).properties(height=400), use_container_width=True)
 
     st.subheader('Net Cash Flow', help="Income minus spending. Transfers between your own accounts are left out of both, "
                  "so they aren't counted twice.")
