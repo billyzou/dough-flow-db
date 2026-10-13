@@ -495,9 +495,20 @@ with this_year_tab:
 
     total_col, category_col = st.columns(2)
     with total_col:
-        st.subheader('Monthly Total Spend', help='Every category combined, transfers excluded')
-        monthly_total = trends.groupby('month', as_index=False)['total'].sum().assign(series='Total spend')
-        st.altair_chart(line_chart(monthly_total, 'month', 'total', 'series', '%b %Y', {'Total spend': PALETTE[0]},
+        st.subheader('Monthly Total Spend', help='Every category combined, transfers excluded. Prior Year is the '
+                     'same month a year earlier (the current month compares a partial month with a full one).')
+        spend_by_month = query('select month, sum(total) as total from gold.monthly_spending group by 1')
+        spend_by_month = spend_by_month.set_index(pd.to_datetime(spend_by_month['month']))['total']
+        months = sorted(trends['month'].unique())
+        monthly_total = pd.concat([
+            pd.DataFrame({'month': months, 'series': 'Total Spend',
+                          'total': spend_by_month.reindex(months).fillna(0).values}),
+            # history starts Jan 2025, so earlier months have no prior year and are left off
+            pd.DataFrame({'month': months, 'series': 'Prior Year',
+                          'total': spend_by_month.reindex([m - pd.DateOffset(years=1) for m in months]).values}).dropna(),
+        ])
+        st.altair_chart(line_chart(monthly_total, 'month', 'total', 'series', '%b %Y',
+                                   {'Total Spend': PALETTE[0], 'Prior Year': OTHER},
                                    monthly=True).properties(height=400), use_container_width=True)
     with category_col:
         st.subheader('Monthly Spend by Category', help=TOP_CATEGORIES_HELP)
