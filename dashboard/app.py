@@ -21,6 +21,15 @@ FAVICON = str(Path(__file__).parent / 'assets' / 'favicon.png')
 
 st.set_page_config(page_title='Dough Flow', page_icon=FAVICON, layout='wide')
 
+
+# Every chart: no gridlines. Keeps Altair's default view size, which charts without a height rely on
+@alt.theme.register('dough_flow', enable=True)
+def dough_flow_theme():
+    return alt.theme.ThemeConfig({'config': {
+        'view': {'continuousWidth': 300, 'continuousHeight': 300},
+        'axis': {'grid': False},
+    }})
+
 # Icon and title sit in the top bar like a site nav: the header goes transparent, the page
 # moves up into it (default top padding is 6rem), and the title shrinks to wordmark size
 st.markdown("""
