@@ -160,14 +160,13 @@ def spread_labels(values, gap, floor=None, top=None):
 
 
 def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, floor=None, show_value=False,
-               fmt=None, tooltip=None, cursor=alt.Undefined):
+               tooltip=None, cursor=alt.Undefined):
     # Name each series just past the chart's right edge instead of using a legend, each with a dot
     # in its series color beside it. Labels that would overlap are spread apart around their lines,
     # and a thin connector joins each line's end to its label.
     ends = ends.sort_values(y).copy()
     ends['label_y'] = spread_labels(ends[y].tolist(), gap, floor, top)
-    fmt = fmt or money
-    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {fmt(v)}') if show_value else '')
+    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {money(v)}') if show_value else '')
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
     if tooltip:
         chart = chart.encode(tooltip=tooltip)
@@ -182,9 +181,10 @@ def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, flo
     return [connector, dot, text]
 
 
-def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', fmt=None, category_help=False,
+def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False,
                monthly=False):
     # category_help: series are categories; hovering a line or its label shows what it includes
+    y_format = '$,.0f'
     color_scale = alt.Scale(domain=list(colors), range=list(colors.values()))
     label_tooltip = alt.value(None)  # otherwise Streamlit shows every field of the label row
     if category_help:
@@ -238,11 +238,11 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, y_format='$,.0f', f
     floor = df[y].min() if not zero else min(df[y].min(), 0)
     span = df[y].max() - floor
     labels = [layer.transform_filter(shown).transform_filter(f'!{isolated}').add_params(pick_label, drop_label) for layer in end_labels(
-        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.05, floor=floor, show_value=True, fmt=fmt,
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=span * 0.05, floor=floor, show_value=True,
         tooltip=label_tooltip, cursor='pointer')]
     # an isolated line is labeled at its own value (the nudging above spaced labels for every line)
     picked_labels = [layer.transform_filter(shown).transform_filter(isolated) for layer in end_labels(
-        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, fmt=fmt, tooltip=label_tooltip)]
+        ends, base.encoding.x, y, color, color_scale, y_format, gap=0, show_value=True, tooltip=label_tooltip)]
     # labels sit past the plot's right edge, outside the targets' hover area, so they still get their own clicks.
     # extra right padding: fitting to the container leaves the end of the longest label clipped
     return alt.layer(rule, line, points, *labels, *picked_labels, targets).properties(
@@ -479,7 +479,6 @@ with this_year_tab:
     top = ranked[:MAX_CATEGORIES]
     trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
     trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
-    trends['share'] = trends['total'] / trends.groupby('month')['total'].transform('sum')
 
     domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
     TOP_CATEGORIES_HELP = (f'Shows the {MAX_CATEGORIES} largest categories; the rest are grouped as Other '
@@ -495,11 +494,6 @@ with this_year_tab:
     st.subheader('Monthly Spend by Category', help=TOP_CATEGORIES_HELP)
     st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors,
                                category_help=True, monthly=True).properties(height=400), use_container_width=True)
-
-    st.subheader('Monthly Spend % by Category', help=TOP_CATEGORIES_HELP)
-    st.altair_chart(line_chart(trends, 'month', 'share', 'category', '%b %Y', category_colors, y_format='.0%',
-                               fmt='{:.0%}'.format, category_help=True, monthly=True).properties(height=400),
-                    use_container_width=True)
 
     st.subheader('Net Cash Flow', help="Income minus spending. Transfers between your own accounts are left out of both, "
                  "so they aren't counted twice.")
