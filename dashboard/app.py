@@ -435,6 +435,40 @@ def money(x, sign=False):
     return f'{prefix}${abs(x):,.0f}'
 
 
+def period_performance(rows, from_start):
+    # Gain and time-weighted return over a period, from rows of (holding, date, quantity, price,
+    # value, cost_basis, source, first_seen), one per holding per day.
+    # The gain is against what was paid. Money added or taken out (flows) isn't gain:
+    # - a holding held the day before: its change in cost basis
+    # - a holding appearing: a first purchase (its first rebuilt day, or any first day when the
+    #   period covers all history) at cost; otherwise it arrives at its market value
+    # - a holding disappearing: taken out at its last value
+    # The return is the assets' market performance: it chains each day's (value - flows) / previous
+    # value, with shares added or sold counted at that day's price, so neither deposit timing nor a
+    # purchase discount (an ESPP buys below market) moves it. Reinvested dividends arrive as new
+    # shares, so it's a price return. Returns (starting value, money in play, gain, return or None).
+    rows = rows.sort_values(['holding', 'date'])
+    start, end = rows['date'].min(), rows['date'].max()
+    first_row = rows.groupby('holding').cumcount() == 0
+    at_start = first_row & (rows['date'] == start) & (not from_start)
+    purchase = (rows['date'] == rows['first_seen']) & ((rows['source'] == 'reconstructed') | from_start)
+    entry = rows['cost_basis'].where(purchase, rows['value'])
+    flow = (rows['cost_basis'] - rows.groupby('holding')['cost_basis'].shift()).where(~first_row, entry.where(~at_start, 0))
+    market_flow = ((rows['quantity'] - rows.groupby('holding')['quantity'].shift()) * rows['price']).where(
+        ~first_row, rows['value'].where(~at_start, 0))
+    daily = rows.assign(flow=flow, market_flow=market_flow).groupby('date')[['value', 'flow', 'market_flow']].sum()
+    exits = rows.groupby('holding').tail(1)
+    exits = exits[exits['date'] < end]
+    for date, value in zip(exits['date'], exits['value']):
+        daily.loc[daily.index[daily.index > date][0], ['flow', 'market_flow']] -= value
+    start_value = rows.loc[at_start, 'value'].sum()
+    put_in = start_value + daily['flow'].sum()
+    gain = daily['value'].iloc[-1] - put_in
+    prev = daily['value'].shift()
+    returns = ((daily['value'] - daily['market_flow']) / prev)[prev > 0]
+    return start_value, put_in, gain, returns.prod() - 1 if len(returns) else None
+
+
 def escape_dollars(text):
     # Streamlit markdown reads text between two dollar signs as math
     return text.replace('$', r'\$')
@@ -852,7 +886,7 @@ with holdings_tab:
                                               "funds and cash")
 
     st.subheader('Performance')
-    history = query('select snapshot_date as date, source, ticker, account, value, cost_basis from gold.holdings_history')
+    history = query('select snapshot_date as date, source, ticker, account, quantity, price, value, cost_basis from gold.holdings_history')
     history['date'] = pd.to_datetime(history['date'])
     history['holding'] = history['ticker'] + ' · ' + history['account']
     # largest holding first, after the total
@@ -866,6 +900,7 @@ with holdings_tab:
 
     # the total only sums holdings with a cost basis, so its two lines compare like for like
     rows = history[history['cost_basis'].notna()] if picked == ALL else history[history['holding'] == picked]
+    rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
     # a period that starts before the selection's history begins counts from nothing held
     from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
     if RANGES[period]:
@@ -875,21 +910,18 @@ with holdings_tab:
     lines = perf.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
     lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
 
-    # Over the period: gain = change in value minus money added (change in cost basis), as a share
-    # of what was in play (the starting value plus money added)
-    start, now = perf.iloc[0], perf.iloc[-1]
-    start_value, start_basis = (0, 0) if from_start else (start['value'], start['cost_basis'])
+    now = perf.iloc[-1]
     dates = f"{perf['date'].min():%b %d, %Y} – {perf['date'].max():%b %d, %Y}"
     if has_basis:
-        put_in = start_value + now['cost_basis'] - start_basis
-        change = now['value'] - put_in
-        pct = f' ({change / put_in:+.1%})' if put_in > 0 else ''
+        start_value, put_in, change, twr = period_performance(rows, from_start)
+        pct = f' ({twr:+.1%})' if twr is not None else ''
         st.markdown(escape_dollars(
             f"**{money(now['value'])}** on {money(put_in)} put in: "
             f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"))
     elif from_start:
         st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
     else:
+        start_value = perf['value'].iloc[0]
         change = now['value'] - start_value
         st.markdown(escape_dollars(
             f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
@@ -902,7 +934,9 @@ with holdings_tab:
         use_container_width=True,
     )
     st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. Over a period "
-               "shorter than the history, \"put in\" is the value at its start plus money added during it. From "
+               "shorter than the history, \"put in\" is the value at its start plus money added during it. The % is how the "
+               "assets performed: each day's market move without that day's deposits, chained, so deposits (and "
+               "buying at a discount) don't move it; reinvested dividends count as deposits. From "
                f"{first_snapshot:%b %d, %Y} both lines are Plaid's daily snapshots. Before that they're rebuilt "
                "from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
                "so shares since sold aren't counted. Holdings without complete purchase records start at the "

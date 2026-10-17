@@ -163,6 +163,8 @@ The **Investments** tab breaks investment accounts down into holdings (ticker, v
 - Funds with no public ticker (e.g. 401K target-date funds) have no Yahoo prices, and institutions often report no cost basis for them.
 - Prices are split-adjusted, not dividend-adjusted, so they multiply with today's (post-split) share counts. Reinvested dividends show up as their own lots.
 
+**Performance headline.** For the selected holding and period, the dollar gain is against what was paid (value minus starting value and money added; a holding that appears mid-period arrives at market value unless it's a first purchase). The % is a time-weighted price return: each day's market move, with shares added or sold valued at that day's price, chained. Deposits, their timing and purchase discounts don't move it; reinvested dividends count as deposits.
+
 **Cost basis** is Plaid's `cost_basis`. When an institution leaves it blank but sends complete tax lots, their total is used instead (`stg_plaid__holdings`).
 
 **Adding an account**
