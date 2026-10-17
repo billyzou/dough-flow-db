@@ -926,7 +926,6 @@ with holdings_tab:
                        height='stretch', help="Value of holdings with no reported cost basis, so no gain: the 401K "
                                               "funds and cash")
 
-    st.subheader('Performance')
     history = query('select snapshot_date as date, source, ticker, account, security_type, quantity, price, '
                     'value, cost_basis from gold.holdings_history')
     history['date'] = pd.to_datetime(history['date'])
@@ -934,6 +933,12 @@ with holdings_tab:
     history['security_type'] = history['security_type'].str.title().replace({'Etf': 'ETF'})
     latest = history[history['date'] == history['date'].max()]
     first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
+    st.subheader('Performance', help=(
+        "Value: what the holdings were worth each day. Cost basis (dotted): what you've put in, as the institution "
+        f"reports it. From {first_snapshot:%b %d, %Y} both come from Plaid's daily snapshots; before that they're "
+        "rebuilt from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
+        "so shares since sold aren't counted. Rolling 1-year return: the trailing year's return as of each day, "
+        "against the S&P 500. More in the Notes tab."))
     RANGES = {'3M': 3, '6M': 6, '1Y': 12, 'ALL': None}
     ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.4], vertical_alignment='bottom')
     # largest first
@@ -981,7 +986,11 @@ with holdings_tab:
             pct = f' ({twr:+.1%})' if twr is not None else ''
             st.markdown(escape_dollars(
                 f"**{money(now['value'])}** on {money(put_in)} put in: "
-                f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"))
+                f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"), help=(
+            "Gain: value now minus the value at the period's start and money added during it, so against what was "
+            "paid. \"Put in\" is that starting value plus money added (for the whole history, the cost basis). "
+            "The %: how the assets performed, each day's market move without that day's deposits, chained, so "
+            "deposits and buying at a discount don't move it. Reinvested dividends count as deposits."))
         elif from_start:
             st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
         else:
@@ -1015,14 +1024,6 @@ with holdings_tab:
         else:
             rolling_col.altair_chart(rolling_chart(rolling.rename_axis('date').reset_index(), x_format)
                                      .properties(height=300), use_container_width=True)
-    st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. Over a period "
-               "shorter than the history, \"put in\" is the value at its start plus money added during it. The % is how the "
-               "assets performed: each day's market move without that day's deposits, chained, so deposits (and "
-               "buying at a discount) don't move it; reinvested dividends count as deposits. From "
-               f"{first_snapshot:%b %d, %Y} both lines are Plaid's daily snapshots. Before that they're rebuilt "
-               "from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
-               "so shares since sold aren't counted. Holdings without complete purchase records start at the "
-               "first snapshot.")
 
     st.subheader('Holdings')
     holdings['security_type'] = holdings['security_type'].str.title().replace({'Etf': 'ETF'})
@@ -1061,5 +1062,28 @@ with notes_tab:
         st.markdown("**To do: link the wife's investment accounts to Plaid for holdings** "
                     "(scripts/plaid_create_link_token.py). Not on the Investments tab yet:")
         st.markdown('\n'.join(f'- {a}' for a in unlinked['account']))
+
+    st.markdown('**How the Investments numbers work**')
+    st.markdown("""
+- **Cost basis** is what you've put into a holding, as the institution reports it. When it leaves that
+  blank but sends complete tax lots, their total is used. 401K funds usually have none.
+- **History:** from the first Plaid holdings snapshot, value and cost basis are what Plaid reported each
+  day. Before that they're rebuilt from the purchase dates (tax lots) of the shares held at the first
+  snapshot and each day's closing price from Yahoo Finance, priced at the previous close like Plaid's
+  morning snapshots. Shares sold before then aren't counted, so the rebuilt past reads low for accounts
+  that sell often (a robo-advisor rebalancing or harvesting losses). Holdings without complete purchase
+  records start at the first snapshot.
+- **Put in:** for the whole history, the cost basis. For a shorter period, the value at its start plus
+  money added during it.
+- **Gain** is value now minus what was put in, so it's against what was paid and includes a purchase
+  discount (an ESPP buys below market).
+- **The %** is a time-weighted price return: each day's market move without that day's deposits, chained.
+  Deposits, their timing and purchase discounts don't move it. Reinvested dividends arrive as new shares,
+  so they count as deposits, and the % runs a little under a total return.
+- **Rolling 1-year return:** that % over the trailing year, as of each day, against the S&P 500's price
+  return (SPY). A mix with bonds, gold or international funds should trail it in years US large caps lead.
+- **All with a cost basis:** a selection that mixes holdings with and without a cost basis leaves out the
+  ones without, so value and cost basis cover the same holdings.
+""")
     with st.container(horizontal_alignment='center'):
         st.image(DANCING_ICON)
