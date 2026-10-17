@@ -149,14 +149,17 @@ The **Investments** tab breaks investment accounts down into holdings (ticker, v
 **Observed vs. reconstructed history.** Plaid only reports what is held *today*, so history is kept in two separate models:
 
 - `silver.fct_holdings`: **observed**. One row per holding per day, exactly as Plaid reported it. Builds up one day per ingest from the first snapshot on.
-- `silver.fct_holdings_reconstructed`: **rebuilt**, for the days before a holding's first snapshot. On each day, shares held = the tax lots bought on or before it, cost basis = what those lots cost, value = shares x that day's close (the last close on weekends and holidays).
+- `silver.fct_holdings_reconstructed`: **rebuilt**, for the days before a holding's first snapshot. Like Plaid's morning snapshots, each row is the start of a day: shares held = the tax lots bought before it, cost basis = what those lots cost, value = shares x the previous trading day's close. The lots are taken from the first snapshot, so later sales don't change the rebuilt past.
 
-`gold.holdings_history` unions the two with a `source` column (`snapshot` or `reconstructed`), so anything downstream can tell them apart. The last reconstructed day matches the first snapshot exactly, since Plaid prices a morning snapshot at the previous close.
+`gold.holdings_history` unions the two with a `source` column (`snapshot` or `reconstructed`), so anything downstream can tell them apart.
+
+**Checking it.** Plaid's daily account balances go back further than holdings, so summing the rebuilt holdings per account and comparing with them tests the reconstruction. An account that rarely sells matches within a fraction of a percent each day. A robo-advised account that sells to rebalance or harvest losses reads low in the past, by the value of shares it has since sold.
 
 **Limits of the reconstruction**
 
 - The lots only cover shares held now. Shares sold earlier are missing from both value and cost, so past value is understated for anything that was trimmed.
-- A holding is only reconstructed when its lots are complete: every lot dated, and together they match the latest snapshot's shares and cost basis. Others start at the first snapshot.
+- A holding is only reconstructed when its lots are complete: every lot dated, and their shares match the first snapshot's. Lots can lag the snapshot by a few days of trades, so trades from the 0-3 days before it are allowed to make up the difference. Others start at the first snapshot.
+- Cash held in an account has no history, so it isn't reconstructed.
 - Funds with no public ticker (e.g. 401K target-date funds) have no Yahoo prices, and institutions often report no cost basis for them.
 - Prices are split-adjusted, not dividend-adjusted, so they multiply with today's (post-split) share counts. Reinvested dividends show up as their own lots.
 
