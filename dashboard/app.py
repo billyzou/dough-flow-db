@@ -353,7 +353,7 @@ def rolling_chart(df, x_format):
     zero = alt.Chart(pd.DataFrame({'ret': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(y='ret:Q')
     _, rule = crosshair(df, 'date', 'series', 'ret', '+.1%', series)
     ends = df[df['date'] == df['date'].max()]
-    labels = end_labels(ends, x, 'ret', 'series', color_scale, '.0%', gap=(df['ret'].max() - df['ret'].min()) * 0.06,
+    labels = end_labels(ends, x, 'ret', 'series', color_scale, '.0%', gap=(df['ret'].max() - df['ret'].min()) * 0.1,
                         show_value=True, value_text=lambda v: f'{v:+.1%}')
     # same right padding as line_chart, so the labels past the plot's edge aren't clipped
     return alt.layer(zero, lines, rule, *labels).properties(
@@ -1002,7 +1002,18 @@ with holdings_tab:
             st.caption(f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
                        "and shares sold before then aren't counted.")
         x_format = '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
+        # Updated in place (a new period, filter or data), Streamlit's chart keeps the datasets of its first
+        # render and fails to load the new ones ("Unrecognized data set"), leaving it blank or without
+        # axes. Streamlit keys a chart by its position, so when the data changes, an empty placeholder
+        # before each chart comes or goes, and the charts mount fresh instead
+        data_key = (period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(perf), float(perf['value'].sum()))
+        if st.session_state.get('performance_data') != data_key:
+            st.session_state['performance_data'] = data_key
+            st.session_state['performance_version'] = st.session_state.get('performance_version', 0) + 1
         chart_col, rolling_col = st.columns([2, 1])
+        if st.session_state['performance_version'] % 2:
+            chart_col.empty()
+            rolling_col.empty()
         chart_col.altair_chart(
             line_chart(lines, 'date', 'amount', 'series', x_format,
                        {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
