@@ -239,7 +239,9 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
                      + [alt.Tooltip(field=f'v_{s}', type='quantitative', format=y_format, title=str(s)) for s in colors])
     base = alt.Chart(df).encode(
         # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
-        x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format, values=[
+        # a year-only format gets one tick per year (otherwise each year repeats on quarterly ticks)
+        x=alt.X(f'{x}:T', title=None, axis=alt.Axis(format=x_format,
+            tickCount={'interval': 'year', 'step': 1} if x_format == '%Y' else alt.Undefined, values=[
             alt.DateTime(year=d.year, month=d.month, date=1) for d in sorted(df[x].unique())] if monthly else alt.Undefined,
             **month_label_axis(f"month(datum.value) == 0", "timeFormat(datum.value, '%b')", "timeFormat(datum.value, '%Y')",
                                hide_when="length(data('month_store'))" if month_bars is not None else None)
