@@ -924,7 +924,12 @@ with holdings_tab:
             rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
         perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
         has_basis = perf['cost_basis'].notna().any()
-        lines = perf.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
+        # ALL spans years of daily points, which makes hovering slow: plot each year's last day (plus
+        # the first). The headline still uses every day
+        points = perf
+        if period == 'ALL':
+            points = perf[perf['date'].isin(perf.groupby(perf['date'].dt.year)['date'].max()) | (perf['date'] == perf['date'].min())]
+        lines = points.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
         lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
 
         now = perf.iloc[-1]
@@ -944,7 +949,7 @@ with holdings_tab:
                 f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
                 "No cost basis reported, so this includes money added."))
         st.altair_chart(
-            line_chart(lines, 'date', 'amount', 'series', '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
+            line_chart(lines, 'date', 'amount', 'series', '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
                        {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
                        dotted=['Cost basis'])
             .properties(height=300),
