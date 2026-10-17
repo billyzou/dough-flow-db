@@ -339,11 +339,12 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         padding={'left': 5, 'top': 24 if month_bars is not None else 5, 'bottom': 5, 'right': 16})
 
 
-def rolling_chart(df, x_format):
-    # Holdings' trailing 1-year return against the S&P 500 (gray, as the reference), with a 0% line
-    series = ['Holdings', 'S&P 500']
+def rolling_chart(df, x_format, colors, title):
+    # Trailing 1-year returns (columns of df named in colors), the S&P 500 in gray as the reference,
+    # with a 0% line
+    series = list(colors)
     df = df.melt('date', series, 'series', 'ret').dropna()
-    color_scale = alt.Scale(domain=series, range=[PALETTE[0], OTHER])
+    color_scale = alt.Scale(domain=series, range=list(colors.values()))
     x = alt.X('date:T', title=None, axis=alt.Axis(
         format=x_format, tickCount={'interval': 'year', 'step': 1} if x_format == '%Y' else alt.Undefined))
     lines = alt.Chart(df).mark_line(strokeWidth=3).encode(
@@ -357,8 +358,27 @@ def rolling_chart(df, x_format):
                         show_value=True, value_text=lambda v: f'{v:+.1%}')
     # same right padding as line_chart, so the labels past the plot's edge aren't clipped
     return alt.layer(zero, lines, rule, *labels).properties(
-        title=alt.Title('Rolling 1-year return', anchor='start', fontSize=14),
+        title=alt.Title(title, anchor='start', fontSize=14),
         padding={'left': 5, 'top': 5, 'bottom': 5, 'right': 16})
+
+
+def fresh(container, name, key):
+    # Streamlit's chart, updated in place (a new period, filter or data), keeps the datasets of its first
+    # render and fails to load the new ones ("Unrecognized data set"), leaving it blank or without axes.
+    # It keys a chart by its position, so when key changes, an empty placeholder before the chart comes
+    # or goes and the chart mounts fresh. Returns the container to draw the chart in
+    if st.session_state.get(f'{name}_data') != key:
+        st.session_state[f'{name}_data'] = key
+        st.session_state[f'{name}_version'] = st.session_state.get(f'{name}_version', 0) + 1
+    if st.session_state[f'{name}_version'] % 2:
+        container.empty()
+    return container
+
+
+def in_period(df, start, period):
+    # Rows of a date-indexed frame from start on; ALL keeps month-ends so years of lines hover quickly
+    df = df[df.index >= start] if start is not None else df
+    return df[df.index.isin(df.groupby(df.index.to_period('M')).tail(1).index)] if period == 'ALL' else df
 
 
 def month_bar_layers(bars, start, end, y_format):
@@ -959,11 +979,11 @@ with holdings_tab:
     if rows['holding'].isin(with_basis).any() and len(left_out):
         rows = rows[rows['holding'].isin(with_basis)]
         st.caption('Excludes cash and retirement accounts.')
+    rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
+    all_rows = rows
     if rows.empty:
         st.info('No holdings match these filters.')
     else:
-        rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
-        all_rows = rows
         # a period that starts before the selection's history begins counts from nothing held
         from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
         if RANGES[period]:
@@ -1002,19 +1022,8 @@ with holdings_tab:
             st.caption(f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
                        "and shares sold before then aren't counted.")
         x_format = '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
-        # Updated in place (a new period, filter or data), Streamlit's chart keeps the datasets of its first
-        # render and fails to load the new ones ("Unrecognized data set"), leaving it blank or without
-        # axes. Streamlit keys a chart by its position, so when the data changes, an empty placeholder
-        # before each chart comes or goes, and the charts mount fresh instead
         data_key = (period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(perf), float(perf['value'].sum()))
-        if st.session_state.get('performance_data') != data_key:
-            st.session_state['performance_data'] = data_key
-            st.session_state['performance_version'] = st.session_state.get('performance_version', 0) + 1
-        chart_col, rolling_col = st.columns([2, 1])
-        if st.session_state['performance_version'] % 2:
-            chart_col.empty()
-            rolling_col.empty()
-        chart_col.altair_chart(
+        fresh(st.container(), 'performance', data_key).altair_chart(
             line_chart(lines, 'date', 'amount', 'series', x_format,
                        {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
                        dotted=['Cost basis'])
@@ -1022,21 +1031,49 @@ with holdings_tab:
             use_container_width=True,
         )
 
-        # Trailing 1-year return as of each day in the period, from the selection's whole history,
-        # next to the S&P 500's (both price returns; the benchmark at the previous close, like snapshots)
-        rolling = rolling_year(daily_returns(daily_flows(all_rows, True)[0])).rename('Holdings')
-        spy = query('select price_date, close from gold.benchmark_prices')
-        spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
-        spy = spy.reindex(pd.date_range(spy.index.min(), rolling.index.max() if len(rolling) else spy.index.max())).ffill().shift(1)
-        rolling = pd.concat([rolling, (spy / spy.shift(365) - 1).rename('S&P 500').reindex(rolling.index)], axis=1)
-        rolling = rolling[rolling.index >= perf['date'].min()]
-        if period == 'ALL':  # month-ends keep a multi-year line quick to hover, like the chart beside it
-            rolling = rolling[rolling.index.isin(rolling.groupby(rolling.index.to_period('M')).tail(1).index)]
-        if rolling.empty:
-            rolling_col.caption('Rolling 1-year return needs a year of history for this selection.')
-        else:
-            rolling_col.altair_chart(rolling_chart(rolling.rename_axis('date').reset_index(), x_format)
-                                     .properties(height=300), use_container_width=True)
+    # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY): the
+    # Performance selection on the left, chosen tickers on the right. Prices are taken at the previous
+    # close, like the morning snapshots
+    st.subheader('Rolling 1-year return', help=(
+        "Each day's return over the year before it, against the S&P 500 (SPY). Left: the holdings picked in the "
+        "Performance filters, time-weighted so deposits don't count. Right: the tickers picked here, from "
+        "their prices. Both are price returns, without dividends. Holdings history before "
+        f"{first_snapshot:%b %d, %Y} is rebuilt, so the left chart is approximate there."))
+    priced = query('select ticker, price_date, close from gold.security_prices')
+    closes = priced.assign(price_date=pd.to_datetime(priced['price_date'])).pivot(index='price_date', columns='ticker', values='close')
+    end_date = history['date'].max()
+    closes = closes.reindex(pd.date_range(closes.index.min(), end_date)).ffill().shift(1)
+    price_rolling = (closes / closes.shift(365) - 1).rename(columns={'SPY': 'S&P 500'})
+    compare_col, rolling_range_col = st.columns([6, 1.4], vertical_alignment='bottom')
+    choices = [t for t in latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index
+               if t in closes.columns and t != 'SPY']
+    compare = compare_col.multiselect('Compare tickers', choices, default=choices[:1], max_selections=4,
+                                      placeholder='Pick tickers')
+    rolling_period = rolling_range_col.segmented_control('Rolling period', list(RANGES), default='ALL',
+                                                         label_visibility='hidden', key='rolling_period') or 'ALL'
+    rolling_start = end_date - pd.DateOffset(months=RANGES[rolling_period]) if RANGES[rolling_period] else None
+    rolling_format = '%Y' if rolling_period == 'ALL' else '%b %d' if rolling_period == '3M' else '%b %Y'
+    holdings_col, tickers_col = st.columns(2)
+
+    holdings_rolling = rolling_year(daily_returns(daily_flows(all_rows, True)[0])) if len(all_rows) else pd.Series(dtype=float)
+    holdings_rolling = in_period(pd.concat([holdings_rolling.rename('Holdings'), price_rolling['S&P 500']], axis=1)
+                                 .reindex(holdings_rolling.index), rolling_start, rolling_period)
+    if holdings_rolling.empty:
+        holdings_col.caption('Needs a year of history for the holdings picked in the Performance filters.')
+    else:
+        fresh(holdings_col, 'rolling_holdings', (rolling_period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(all_rows))).altair_chart(
+            rolling_chart(holdings_rolling.rename_axis('date').reset_index(), rolling_format,
+                          {'Holdings': PALETTE[0], 'S&P 500': OTHER}, 'Holdings vs S&P 500')
+            .properties(height=300), use_container_width=True)
+
+    ticker_rolling = in_period(price_rolling[compare + ['S&P 500']].dropna(how='all'), rolling_start, rolling_period)
+    if not compare:
+        tickers_col.caption('Pick tickers to compare with the S&P 500.')
+    else:
+        fresh(tickers_col, 'rolling_tickers', (rolling_period, tuple(compare))).altair_chart(
+            rolling_chart(ticker_rolling.rename_axis('date').reset_index(), rolling_format,
+                          {**dict(zip(compare, PALETTE)), 'S&P 500': OTHER}, 'Tickers vs S&P 500')
+            .properties(height=300), use_container_width=True)
 
     st.subheader('Holdings')
     holdings['security_type'] = holdings['security_type'].str.title().replace({'Etf': 'ETF'})
@@ -1095,7 +1132,7 @@ with notes_tab:
   Deposits, their timing and purchase discounts don't move it. Reinvested dividends arrive as new shares,
   so they count as deposits, and the % runs a little under a total return.
 - **Rolling 1-year return:** that % over the trailing year, as of each day, against the S&P 500's price
-  return (SPY). A mix with bonds, gold or international funds should trail it in years US large caps lead.
+  return (SPY), for the holdings picked in the Performance filters; beside it, the same for chosen tickers. A mix with bonds, gold or international funds should trail it in years US large caps lead.
 - **All with a cost basis:** a selection that mixes holdings with and without a cost basis leaves out the
   ones without, so value and cost basis cover the same holdings.
 """)
