@@ -958,8 +958,7 @@ with holdings_tab:
     left_out = latest[latest['holding'].isin(rows['holding']) & ~latest['holding'].isin(with_basis)]
     if rows['holding'].isin(with_basis).any() and len(left_out):
         rows = rows[rows['holding'].isin(with_basis)]
-        st.caption(escape_dollars(f"Leaving out {len(left_out)} holdings with no cost basis "
-                                  f"({money(left_out['value'].sum())}): {', '.join(sorted(left_out['ticker'].unique()))}."))
+        st.caption('Excludes cash and retirement accounts.')
     if rows.empty:
         st.info('No holdings match these filters.')
     else:
