@@ -886,7 +886,7 @@ with holdings_tab:
                                               "funds and cash")
 
     st.subheader('Performance')
-    history = query('select snapshot_date as date, source, ticker, account, account_group, security_type, quantity, price, '
+    history = query('select snapshot_date as date, source, ticker, account, security_type, quantity, price, '
                     'value, cost_basis from gold.holdings_history')
     history['date'] = pd.to_datetime(history['date'])
     history['holding'] = history['ticker'] + ' · ' + history['account']
@@ -898,12 +898,13 @@ with holdings_tab:
     # largest first
     tickers = ticker_col.multiselect('Ticker', list(latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index),
                                      placeholder='All')
-    groups = account_col.multiselect('Account type', sorted(history['account_group'].unique()), placeholder='All')
+    chosen_accounts = account_col.multiselect('Account', list(latest.groupby('account')['value'].sum().sort_values(ascending=False).index),
+                                              placeholder='All')
     types = type_col.multiselect('Holding type', sorted(history['security_type'].unique()), placeholder='All')
     period = range_col.segmented_control('Period', list(RANGES), default='ALL', label_visibility='hidden') or 'ALL'
 
     rows = history[history['ticker'].isin(tickers or history['ticker'])
-                   & history['account_group'].isin(groups or history['account_group'])
+                   & history['account'].isin(chosen_accounts or history['account'])
                    & history['security_type'].isin(types or history['security_type'])]
     # summing holdings with and without a cost basis would put the two lines on different
     # holdings, so a mixed selection keeps only those with one
