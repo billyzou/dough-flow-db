@@ -339,7 +339,7 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         padding={'left': 5, 'top': 24 if month_bars is not None else 5, 'bottom': 5, 'right': 16})
 
 
-def rolling_chart(df, x_format, colors, title):
+def rolling_chart(df, x_format, colors):
     # Trailing 1-year returns (columns of df named in colors), the S&P 500 as the reference in blue
     # dotted (like cost basis on the performance chart), with a 0% line
     series = list(colors)
@@ -360,7 +360,6 @@ def rolling_chart(df, x_format, colors, title):
                         show_value=True, value_text=lambda v: f'{v:+.1%}')
     # same right padding as line_chart, so the labels past the plot's edge aren't clipped
     return alt.layer(zero, lines, rule, *labels).properties(
-        title=alt.Title(title, anchor='start', fontSize=14),
         padding={'left': 5, 'top': 5, 'bottom': 5, 'right': 16})
 
 
@@ -378,9 +377,9 @@ def fresh(container, name, key):
 
 
 def in_period(df, start, period):
-    # Rows of a date-indexed frame from start on; ALL keeps month-ends so years of lines hover quickly
+    # Rows of a date-indexed frame from start on; 5Y and ALL keep month-ends so years of lines hover quickly
     df = df[df.index >= start] if start is not None else df
-    return df[df.index.isin(df.groupby(df.index.to_period('M')).tail(1).index)] if period == 'ALL' else df
+    return df[df.index.isin(df.groupby(df.index.to_period('M')).tail(1).index)] if period in ('5Y', 'ALL') else df
 
 
 def month_bar_layers(bars, start, end, y_format):
@@ -961,15 +960,15 @@ with holdings_tab:
         "rebuilt from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
         "so shares since sold aren't counted and performance there is likely inaccurate. Rolling 1-year return: the trailing year's return as of each day, "
         "against the S&P 500. More in the Notes tab."))
-    RANGES = {'3M': 3, '6M': 6, '1Y': 12, 'ALL': None}
-    ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.4], vertical_alignment='bottom')
+    RANGES = {'3M': 3, '6M': 6, '1Y': 12, '5Y': 60, 'ALL': None}
+    ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.7], vertical_alignment='bottom')
     # largest first
     tickers = ticker_col.multiselect('Ticker', list(latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index),
                                      placeholder='All')
     chosen_accounts = account_col.multiselect('Account', list(latest.groupby('account')['value'].sum().sort_values(ascending=False).index),
                                               placeholder='All')
     types = type_col.multiselect('Holding type', sorted(history['security_type'].unique()), placeholder='All')
-    period = range_col.segmented_control('Period', list(RANGES), default='ALL', label_visibility='hidden') or 'ALL'
+    period = range_col.segmented_control('Period', list(RANGES), default='1Y', label_visibility='hidden') or '1Y'
 
     rows = history[history['ticker'].isin(tickers or history['ticker'])
                    & history['account'].isin(chosen_accounts or history['account'])
@@ -992,11 +991,12 @@ with holdings_tab:
             rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
         perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
         has_basis = perf['cost_basis'].notna().any()
-        # ALL spans years of daily points, which makes hovering slow: plot each year's last day (plus
-        # the first). The headline still uses every day
+        # 5Y and ALL span years of daily points, which makes hovering slow: plot each month's (5Y) or
+        # quarter's (ALL) last day, plus the first. The headline still uses every day
         points = perf
-        if period == 'ALL':
-            points = perf[perf['date'].isin(perf.groupby(perf['date'].dt.year)['date'].max()) | (perf['date'] == perf['date'].min())]
+        if period in ('5Y', 'ALL'):
+            step = perf['date'].dt.to_period('M' if period == '5Y' else 'Q')
+            points = perf[perf['date'].isin(perf.groupby(step)['date'].max()) | (perf['date'] == perf['date'].min())]
         lines = points.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
         lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
 
@@ -1023,7 +1023,7 @@ with holdings_tab:
         if (rows['source'] == 'reconstructed').any():
             st.caption(f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
                        "and shares sold before then aren't counted.")
-        x_format = '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
+        x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
         data_key = (period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(perf), float(perf['value'].sum()))
         fresh(st.container(), 'performance', data_key).altair_chart(
             line_chart(lines, 'date', 'amount', 'series', x_format,
@@ -1046,16 +1046,18 @@ with holdings_tab:
     end_date = history['date'].max()
     closes = closes.reindex(pd.date_range(closes.index.min(), end_date)).ffill().shift(1)
     price_rolling = (closes / closes.shift(365) - 1).rename(columns={'SPY': 'S&P 500'})
-    compare_col, rolling_range_col = st.columns([6, 1.4], vertical_alignment='bottom')
+    compare_col, rolling_range_col = st.columns([6, 1.7], vertical_alignment='bottom')
     choices = [t for t in latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index
                if t in closes.columns and t != 'SPY']
     compare = compare_col.multiselect('Compare tickers', choices, default=choices[:1], max_selections=4,
                                       placeholder='Pick tickers')
-    rolling_period = rolling_range_col.segmented_control('Rolling period', list(RANGES), default='ALL',
-                                                         label_visibility='hidden', key='rolling_period') or 'ALL'
+    rolling_period = rolling_range_col.segmented_control('Rolling period', list(RANGES), default='1Y',
+                                                         label_visibility='hidden', key='rolling_period') or '1Y'
     rolling_start = end_date - pd.DateOffset(months=RANGES[rolling_period]) if RANGES[rolling_period] else None
-    rolling_format = '%Y' if rolling_period == 'ALL' else '%b %d' if rolling_period == '3M' else '%b %Y'
+    rolling_format = '%Y' if rolling_period in ('5Y', 'ALL') else '%b %d' if rolling_period == '3M' else '%b %Y'
     holdings_col, tickers_col = st.columns(2)
+    holdings_col.subheader('Holdings vs S&P 500')
+    tickers_col.subheader('Tickers vs S&P 500')
 
     holdings_rolling = rolling_year(daily_returns(daily_flows(all_rows, True)[0])) if len(all_rows) else pd.Series(dtype=float)
     holdings_rolling = in_period(pd.concat([holdings_rolling.rename('Holdings'), price_rolling['S&P 500']], axis=1)
@@ -1065,7 +1067,7 @@ with holdings_tab:
     else:
         fresh(holdings_col, 'rolling_holdings', (rolling_period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(all_rows))).altair_chart(
             rolling_chart(holdings_rolling.rename_axis('date').reset_index(), rolling_format,
-                          {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]}, 'Holdings vs S&P 500')
+                          {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]})
             .properties(height=300), use_container_width=True)
 
     ticker_rolling = in_period(price_rolling[compare + ['S&P 500']].dropna(how='all'), rolling_start, rolling_period)
@@ -1074,7 +1076,7 @@ with holdings_tab:
     else:
         fresh(tickers_col, 'rolling_tickers', (rolling_period, tuple(compare))).altair_chart(
             rolling_chart(ticker_rolling.rename_axis('date').reset_index(), rolling_format,
-                          {**dict(zip(compare, PALETTE)), 'S&P 500': PALETTE[0]}, 'Tickers vs S&P 500')
+                          {**dict(zip(compare, PALETTE)), 'S&P 500': PALETTE[0]})
             .properties(height=300), use_container_width=True)
 
     st.subheader('Holdings')
