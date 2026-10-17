@@ -1025,10 +1025,11 @@ with holdings_tab:
                "first snapshot.")
 
     st.subheader('Holdings')
-    holdings = holdings.sort_values('value', ascending=False)
-    table = holdings[['ticker', 'security_name', 'account', 'security_type', 'value', 'cost_basis', 'gain', 'gain_pct']].assign(
-        security_type=holdings['security_type'].str.title().replace({'Etf': 'ETF'}),
-    ).rename(columns={'ticker': 'Ticker', 'security_name': 'Name', 'account': 'Account', 'security_type': 'Type',
+    holdings['security_type'] = holdings['security_type'].str.title().replace({'Etf': 'ETF'})
+    # by type (alphabetical, cash last), then largest first
+    holdings = holdings.sort_values(['security_type', 'value'], ascending=[True, False],
+                                    key=lambda c: c.replace('Cash', '~') if c.name == 'security_type' else c)
+    table = holdings[['ticker', 'security_name', 'account', 'security_type', 'value', 'cost_basis', 'gain', 'gain_pct']].rename(columns={'ticker': 'Ticker', 'security_name': 'Name', 'account': 'Account', 'security_type': 'Type',
                       'value': 'Value', 'cost_basis': 'Cost Basis', 'gain': 'Gain', 'gain_pct': 'Gain %'})
     html_table(
         table,
