@@ -886,53 +886,69 @@ with holdings_tab:
                                               "funds and cash")
 
     st.subheader('Performance')
-    history = query('select snapshot_date as date, source, ticker, account, quantity, price, value, cost_basis from gold.holdings_history')
+    history = query('select snapshot_date as date, source, ticker, account, account_group, security_type, quantity, price, '
+                    'value, cost_basis from gold.holdings_history')
     history['date'] = pd.to_datetime(history['date'])
     history['holding'] = history['ticker'] + ' · ' + history['account']
-    # largest holding first, after the total
-    latest = history[history['date'] == history['date'].max()].sort_values('value', ascending=False)
+    history['security_type'] = history['security_type'].str.title().replace({'Etf': 'ETF'})
+    latest = history[history['date'] == history['date'].max()]
     first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
-    ALL = 'All holdings with a cost basis'
     RANGES = {'3M': 3, '6M': 6, '1Y': 12, 'ALL': None}
-    pick_col, range_col = st.columns([3, 1], vertical_alignment='bottom')
-    picked = pick_col.selectbox('Holding', [ALL] + list(latest['holding']))
+    ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.4], vertical_alignment='bottom')
+    # largest first
+    tickers = ticker_col.multiselect('Ticker', list(latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index),
+                                     placeholder='All')
+    groups = account_col.multiselect('Account type', sorted(history['account_group'].unique()), placeholder='All')
+    types = type_col.multiselect('Holding type', sorted(history['security_type'].unique()), placeholder='All')
     period = range_col.segmented_control('Period', list(RANGES), default='ALL', label_visibility='hidden') or 'ALL'
 
-    # the total only sums holdings with a cost basis, so its two lines compare like for like
-    rows = history[history['cost_basis'].notna()] if picked == ALL else history[history['holding'] == picked]
-    rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
-    # a period that starts before the selection's history begins counts from nothing held
-    from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
-    if RANGES[period]:
-        rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
-    perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
-    has_basis = perf['cost_basis'].notna().any()
-    lines = perf.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
-    lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
-
-    now = perf.iloc[-1]
-    dates = f"{perf['date'].min():%b %d, %Y} – {perf['date'].max():%b %d, %Y}"
-    if has_basis:
-        start_value, put_in, change, twr = period_performance(rows, from_start)
-        pct = f' ({twr:+.1%})' if twr is not None else ''
-        st.markdown(escape_dollars(
-            f"**{money(now['value'])}** on {money(put_in)} put in: "
-            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"))
-    elif from_start:
-        st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
+    rows = history[history['ticker'].isin(tickers or history['ticker'])
+                   & history['account_group'].isin(groups or history['account_group'])
+                   & history['security_type'].isin(types or history['security_type'])]
+    # summing holdings with and without a cost basis would put the two lines on different
+    # holdings, so a mixed selection keeps only those with one
+    with_basis = latest.loc[latest['cost_basis'].notna(), 'holding']
+    left_out = latest[latest['holding'].isin(rows['holding']) & ~latest['holding'].isin(with_basis)]
+    if rows['holding'].isin(with_basis).any() and len(left_out):
+        rows = rows[rows['holding'].isin(with_basis)]
+        st.caption(escape_dollars(f"Leaving out {len(left_out)} holdings with no cost basis "
+                                  f"({money(left_out['value'].sum())}): {', '.join(sorted(left_out['ticker'].unique()))}."))
+    if rows.empty:
+        st.info('No holdings match these filters.')
     else:
-        start_value = perf['value'].iloc[0]
-        change = now['value'] - start_value
-        st.markdown(escape_dollars(
-            f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
-            "No cost basis reported, so this includes money added."))
-    st.altair_chart(
-        line_chart(lines, 'date', 'amount', 'series', '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
-                   {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
-                   dotted=['Cost basis'])
-        .properties(height=300),
-        use_container_width=True,
-    )
+        rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
+        # a period that starts before the selection's history begins counts from nothing held
+        from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
+        if RANGES[period]:
+            rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
+        perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
+        has_basis = perf['cost_basis'].notna().any()
+        lines = perf.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
+        lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
+
+        now = perf.iloc[-1]
+        dates = f"{perf['date'].min():%b %d, %Y} – {perf['date'].max():%b %d, %Y}"
+        if has_basis:
+            start_value, put_in, change, twr = period_performance(rows, from_start)
+            pct = f' ({twr:+.1%})' if twr is not None else ''
+            st.markdown(escape_dollars(
+                f"**{money(now['value'])}** on {money(put_in)} put in: "
+                f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"))
+        elif from_start:
+            st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
+        else:
+            start_value = perf['value'].iloc[0]
+            change = now['value'] - start_value
+            st.markdown(escape_dollars(
+                f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
+                "No cost basis reported, so this includes money added."))
+        st.altair_chart(
+            line_chart(lines, 'date', 'amount', 'series', '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
+                       {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
+                       dotted=['Cost basis'])
+            .properties(height=300),
+            use_container_width=True,
+        )
     st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. Over a period "
                "shorter than the history, \"put in\" is the value at its start plus money added during it. The % is how the "
                "assets performed: each day's market move without that day's deposits, chained, so deposits (and "
