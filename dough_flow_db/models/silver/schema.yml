@@ -53,3 +53,45 @@ models:
               arguments:
                 to: ref('dim_account')
                 field: account_id
+
+  - name: dim_security
+    columns:
+      - name: security_id
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_holdings
+    columns:
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_account')
+                field: account_id
+      - name: security_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_security')
+                field: security_id
+
+  - name: fct_holdings_reconstructed
+    description: >
+      Rebuilt holdings history before each holding's first Plaid snapshot (tax lots x Yahoo
+      closes). Not observed data: shares since sold are missing. Kept apart from fct_holdings.
+    columns:
+      - name: account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_account')
+                field: account_id
+      - name: security_id
+        tests:
+          - relationships:
+              arguments:
+                to: ref('dim_security')
+                field: security_id

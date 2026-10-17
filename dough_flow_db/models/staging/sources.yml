@@ -11,6 +11,14 @@ sources:
         description: Plaid transaction payloads; a new row each time a payload changes.
       - name: plaid_accounts
         description: Plaid account payloads with balances, one row per account per ingest run.
+      - name: plaid_holdings
+        description: Plaid holdings payloads, one row per holding per ingest run.
+      - name: plaid_securities
+        description: Plaid security payloads, one row per security per ingest run.
+      - name: plaid_investment_transactions
+        description: Plaid investment transaction payloads; a new row each time a payload changes.
+      - name: security_prices
+        description: Yahoo Finance daily closes, split-adjusted (backfill_prices.py). Only for rebuilding history.
       - name: manual_balances
         description: Hand-entered balance snapshots (update_balance.py).
       - name: category_overrides

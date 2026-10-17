@@ -66,8 +66,6 @@ st.markdown("""
 }
 /* the tab underline is a separate element that would scroll away; the box-shadow above replaces it */
 [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
-/* breathing room between each tab's last chart/table and the dancing bread */
-[class*="st-key-dancer-"] { margin-top: 3rem; }
 /* line charts with month_bars: clicking off the lines picks a month (see line_chart) */
 .month_targets_voronoi path { cursor: pointer; }
 /* html_table(): looks like st.dataframe, plus hover tooltips. Grays mix with the text color so
@@ -82,6 +80,8 @@ st.markdown("""
 .dough-table tbody tr:last-child td { border-bottom: none; }
 /* number columns hug their contents so text columns (merchant, category) get the spare width */
 .dough-table .num { text-align: right; width: 1%; padding: 0 16px; }
+.dough-table .pos { color: #30a46c; }
+.dough-table .neg { color: #e5484d; }
 .has-tip { position: relative; cursor: help; }
 .has-tip.category { text-decoration: underline dotted; text-underline-offset: 3px; }
 .has-tip.help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
@@ -208,7 +208,8 @@ def hit_points(df, x, y, color, per_segment):
 
 
 def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False, monthly=False, prior=None,
-               month_bars=None):
+               month_bars=None, dotted=()):
+    # dotted: series drawn as a dotted line (e.g. a reference line in the same color as another series).
     # category_help: series are categories; hovering a line or its label shows what it includes.
     # prior: column of each point's value a year earlier, drawn dashed for an isolated line.
     # month_bars: rows of (month, name, total, prior) for every category. Clicking off the lines
@@ -270,7 +271,10 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
     isolated = "length(data('pick_store'))"
     rule = alt.Chart(df).mark_rule(color=OTHER).encode(
         x=base.encoding.x, opacity=alt.condition(hovered, alt.value(0.8), alt.value(0))).transform_filter(shown)
-    line = base.mark_line(strokeWidth=3).transform_filter(shown)
+    line = base.mark_line(strokeWidth=3).encode(strokeDash=alt.StrokeDash(
+        f'{color}:N', legend=None,
+        scale=alt.Scale(domain=list(colors), range=[[3, 4] if s in dotted else [1, 0] for s in colors]),
+    )).transform_filter(shown)
     points = base.mark_point(filled=True, size=60, opacity=1).encode(
         opacity=alt.condition(hovered, alt.value(1), alt.value(0))).transform_filter(shown)
     ends = df[df[x] == df[x].max()].copy()
@@ -397,9 +401,10 @@ def money_table(df, columns, sort_by, help=None, total=True):
     html_table(df, {c: '${:,.0f}' for c in df.columns[1:]}, help=help)
 
 
-def html_table(df, formats=None, help=None):
+def html_table(df, formats=None, help=None, colored=()):
     # A static table like st.dataframe, which can't show tooltips: a ? on headers listed in
-    # `help`, and each category name in a Category column shows what it includes
+    # `help`, and each category name in a Category column shows what it includes. A format is a
+    # format string or a function; missing values show blank. `colored` columns are green/red by sign.
     formats, help = formats or {}, help or {}
     numeric = {c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])}
 
@@ -415,10 +420,12 @@ def html_table(df, formats=None, help=None):
     for row in df.to_dict('records'):
         cells = ''
         for c in df.columns:
-            text = escape(formats[c].format(row[c]) if c in formats else str(row[c]))
+            f = formats.get(c, str)
+            text = '' if pd.isna(row[c]) else escape(f(row[c]) if callable(f) else f.format(row[c]))
             if c == 'Category' and row[c] in CATEGORY_HELP:
                 text = f'<span class="has-tip category">{text}{tip(CATEGORY_HELP[row[c]])}</span>'
-            cells += f'<td class="{"num" if c in numeric else ""}">{text}</td>'
+            sign = 'pos' if c in colored and row[c] > 0 else 'neg' if c in colored and row[c] < 0 else ''
+            cells += f'<td class="{"num" if c in numeric else ""} {sign}">{text}</td>'
         rows += f'<tr>{cells}</tr>'
     st.html(f'<table class="dough-table"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>')
 
@@ -461,8 +468,8 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.title('Dough Flow')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, this_month_tab, this_year_tab, transactions_tab = st.tabs(
-    ['Net Worth', 'This Month', 'This Year', 'Transactions'])
+net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, notes_tab = st.tabs(
+    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions', 'Notes'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -829,6 +836,100 @@ with net_worth_tab:
             f'{len(stale)} accounts have no balance in over 30 days and are carried forward at their last value: '
             f'{money(stale["value"].sum())} in total. Update them with scripts/update_balance.py.'))
 
-for i, tab in enumerate((net_worth_tab, this_month_tab, this_year_tab, transactions_tab)):
-    with tab, st.container(horizontal_alignment='center', key=f'dancer-{i}'):
+# ---------- Holdings: what's in my investment accounts? ----------
+with holdings_tab:
+    st.caption("Wife's investments are not included yet: her accounts aren't linked to Plaid for holdings (see Notes).")
+    holdings = query('select * from gold.holdings where snapshot_date = (select max(snapshot_date) from gold.holdings)')
+    with_basis = holdings[holdings['cost_basis'].notna()]
+    gain = with_basis['gain'].sum()
+
+    value_col, gain_col, unknown_col = st.columns(3)
+    value_col.metric('Holdings value', money(holdings['value'].sum()), border=True, height='stretch')
+    gain_col.metric('Unrealized gain', money(gain, sign=True), delta=f'{gain / with_basis["cost_basis"].sum():+.1%}',
+                    border=True, height='stretch', help='Only holdings whose institution reports a cost basis')
+    unknown_col.metric('No cost basis', money(holdings['value'].sum() - with_basis['value'].sum()), border=True,
+                       height='stretch', help="Value of holdings with no reported cost basis, so no gain: the 401K "
+                                              "funds and cash")
+
+    st.subheader('Performance')
+    history = query('select snapshot_date as date, source, ticker, account, value, cost_basis from gold.holdings_history')
+    history['date'] = pd.to_datetime(history['date'])
+    history['holding'] = history['ticker'] + ' · ' + history['account']
+    # largest holding first, after the total
+    latest = history[history['date'] == history['date'].max()].sort_values('value', ascending=False)
+    first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
+    ALL = 'All holdings with a cost basis'
+    RANGES = {'3M': 3, '6M': 6, '1Y': 12, 'ALL': None}
+    pick_col, range_col = st.columns([3, 1], vertical_alignment='bottom')
+    picked = pick_col.selectbox('Holding', [ALL] + list(latest['holding']))
+    period = range_col.segmented_control('Period', list(RANGES), default='ALL', label_visibility='hidden') or 'ALL'
+
+    # the total only sums holdings with a cost basis, so its two lines compare like for like
+    rows = history[history['cost_basis'].notna()] if picked == ALL else history[history['holding'] == picked]
+    if RANGES[period]:
+        rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
+    perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
+    has_basis = perf['cost_basis'].notna().any()
+    lines = perf.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
+    lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
+
+    now = perf.iloc[-1]
+    if has_basis:
+        change = now['value'] - now['cost_basis']
+        st.markdown(escape_dollars(
+            f"**{money(now['value'])}** on {money(now['cost_basis'])} put in: "
+            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)} ({change / now['cost_basis']:+.1%})]"))
+    else:
+        st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
+    st.altair_chart(
+        line_chart(lines, 'date', 'amount', 'series', '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
+                   {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
+                   dotted=['Cost basis'])
+        .properties(height=300),
+        use_container_width=True,
+    )
+    st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. From "
+               f"{first_snapshot:%b %d, %Y} both lines are Plaid's daily snapshots. Before that they're rebuilt "
+               "from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
+               "so shares since sold aren't counted. Holdings without complete purchase records start at the "
+               "first snapshot.")
+
+    st.subheader('Holdings')
+    holdings = holdings.sort_values('value', ascending=False)
+    table = holdings[['ticker', 'security_name', 'account', 'security_type', 'value', 'cost_basis', 'gain', 'gain_pct']].assign(
+        security_type=holdings['security_type'].str.title().replace({'Etf': 'ETF'}),
+    ).rename(columns={'ticker': 'Ticker', 'security_name': 'Name', 'account': 'Account', 'security_type': 'Type',
+                      'value': 'Value', 'cost_basis': 'Cost Basis', 'gain': 'Gain', 'gain_pct': 'Gain %'})
+    html_table(
+        table,
+        {'Value': cents, 'Cost Basis': cents, 'Gain': signed_cents, 'Gain %': '{:+.1%}'},
+        help={
+            'Type': "ETF: exchange-traded fund. Equity: a single company's stock. Mutual Fund: a pooled fund "
+                    "priced once a day. Cash: uninvested cash. Types come from the institution, which sometimes "
+                    "labels a 401K fund as Equity.",
+            'Cost Basis': "What you paid in total for the shares you hold now, as reported by the institution. "
+                          "Blank when it doesn't report one.",
+            'Gain': "Value minus cost basis: what you'd make if you sold today, before taxes.",
+            'Gain %': 'Gain as a percentage of cost basis.',
+        },
+        colored=('Gain', 'Gain %'),
+    )
+    st.caption(f"As of {pd.to_datetime(holdings['snapshot_date'].max()):%b %d, %Y}. Accounts linked to Plaid with "
+               "investments access only; see the Notes tab for the ones still to link.")
+
+# ---------- Notes ----------
+with notes_tab:
+    # read from the database so account names stay out of the code
+    unlinked = query("""
+        select distinct institution || ' · ' || account_name as account
+        from gold.daily_balances
+        where owner = 'wife' and account_group in ('Investments', 'Retirement')
+          and account_id not in (select account_id from gold.holdings)
+        order by 1
+    """)
+    if len(unlinked):
+        st.markdown("**To do: link the wife's investment accounts to Plaid for holdings** "
+                    "(scripts/plaid_create_link_token.py). Not on the Investments tab yet:")
+        st.markdown('\n'.join(f'- {a}' for a in unlinked['account']))
+    with st.container(horizontal_alignment='center'):
         st.image(DANCING_ICON)

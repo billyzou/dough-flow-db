@@ -50,6 +50,50 @@ CREATE TABLE IF NOT EXISTS bronze.plaid_accounts (
     loaded_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
+-- Plaid /investments/holdings/get rows, one per holding per ingest run. Only for
+-- enrollments with the investments product.
+CREATE TABLE IF NOT EXISTS bronze.plaid_holdings (
+    load_id          BIGSERIAL    PRIMARY KEY,
+    enrollment       VARCHAR(150) NOT NULL,
+    plaid_account_id VARCHAR(100) NOT NULL,
+    security_id      VARCHAR(100) NOT NULL,
+    payload          JSONB        NOT NULL,
+    loaded_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- The securities those holdings (and investment transactions) point to, one row per
+-- security per ingest run: close_price changes daily.
+CREATE TABLE IF NOT EXISTS bronze.plaid_securities (
+    load_id     BIGSERIAL    PRIMARY KEY,
+    enrollment  VARCHAR(150) NOT NULL,
+    security_id VARCHAR(100) NOT NULL,
+    payload     JSONB        NOT NULL,
+    loaded_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- Plaid /investments/transactions/get rows (buys, sells, dividends, fees). Plaid only
+-- goes back 24 months, so this keeps older trades. New row only when a payload changes.
+CREATE TABLE IF NOT EXISTS bronze.plaid_investment_transactions (
+    investment_transaction_id VARCHAR(100) NOT NULL,
+    payload_hash              CHAR(32)     NOT NULL,
+    enrollment                VARCHAR(150) NOT NULL,
+    payload                   JSONB        NOT NULL,
+    loaded_at                 TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (investment_transaction_id, payload_hash)
+);
+
+-- Daily closing prices from Yahoo Finance (scripts/backfill_prices.py). Split-adjusted but not
+-- dividend-adjusted, so they multiply with today's share counts. Only used to rebuild holdings
+-- history before the first Plaid snapshot. Re-fetching a day replaces it: a later split changes
+-- every earlier close.
+CREATE TABLE IF NOT EXISTS bronze.security_prices (
+    ticker     VARCHAR(20)    NOT NULL,
+    price_date DATE           NOT NULL,
+    close      NUMERIC(18, 6) NOT NULL,
+    loaded_at  TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (ticker, price_date)
+);
+
 -- Hand-entered balance snapshots (scripts/update_balance.py). Append-only: re-entering a
 -- date adds a row and silver keeps the latest.
 CREATE TABLE IF NOT EXISTS bronze.manual_balances (

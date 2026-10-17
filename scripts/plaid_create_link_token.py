@@ -8,8 +8,17 @@ Run once each time you want to open Plaid Link — link_tokens expire after 30 m
 Usage:
     python3 scripts/plaid_create_link_token.py
     # copy the printed link_token into plaid_link.html when prompted
+
+    python3 scripts/plaid_create_link_token.py BROKERAGE
+    # update mode: re-links PLAID_TOKEN_BROKERAGE and asks for investments consent.
+    # The access_token stays the same, so skip plaid_exchange_public_token.py afterwards.
+
+    python3 scripts/plaid_create_link_token.py NEW_BROKERAGE
+    # a label with no PLAID_TOKEN_<LABEL> yet: a new investments link (plus transactions
+    # where the bank supports them). Exchange the public_token as usual.
 """
 import os
+import sys
 
 from dotenv import load_dotenv
 import plaid
@@ -36,13 +45,28 @@ config = plaid.Configuration(
 )
 client = plaid_api.PlaidApi(plaid.ApiClient(config))
 
+label = sys.argv[1].upper() if len(sys.argv) > 1 else None
+if label and f'PLAID_TOKEN_{label}' in os.environ:
+    # Update mode: an existing Item takes access_token instead of products
+    mode = {
+        'access_token': os.environ[f'PLAID_TOKEN_{label}'],
+        'additional_consented_products': [Products('investments')],
+    }
+elif label:
+    mode = {
+        'products': [Products('investments')],
+        'required_if_supported_products': [Products('transactions')],
+    }
+else:
+    mode = {'products': [Products('transactions')]}
+
 response = client.link_token_create(
     LinkTokenCreateRequest(
         user=LinkTokenCreateRequestUser(client_user_id=os.environ.get('DB_USER', 'user')),
         client_name='dough-flow-db',
-        products=[Products('transactions')],
         country_codes=[CountryCode('US')],
         language='en',
+        **mode,
     )
 )
 

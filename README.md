@@ -108,9 +108,9 @@ Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and 
 
 | Schema | Contents |
 |---|---|
-| `bronze` | Raw data as it arrived: Plaid transaction and account payloads (JSON), hand-entered balances, the account registry, category overrides, the category seeds, and frozen copies of the pre-medallion tables (the only source for the 2025 CSV backfill) |
-| `silver` | `stg_*` cleaning views, then `fct_transactions` (one row per posted transaction), `fct_account_balances` (one row per account per snapshot day), `dim_account`, `dim_category` |
-| `gold` | Dashboard-ready models: `transactions` (facts joined to dims) and the aggregates built on it |
+| `bronze` | Raw data as it arrived: Plaid transaction, account, holdings, security and investment transaction payloads (JSON), hand-entered balances, the account registry, category overrides, the category seeds, and frozen copies of the pre-medallion tables (the only source for the 2025 CSV backfill) |
+| `silver` | `stg_*` cleaning views, then `fct_transactions` (one row per posted transaction), `fct_account_balances` (one row per account per snapshot day), `fct_holdings` (one row per account per security per snapshot day), `fct_holdings_reconstructed` (rebuilt history before the first snapshot; see [Investments](#investments)), `dim_account`, `dim_category`, `dim_security` |
+| `gold` | Dashboard-ready models: `transactions` (facts joined to dims) and the aggregates built on it, plus `holdings` (positions with unrealized gain) and `holdings_history` (value and cost basis per holding per day; see [Investments](#investments)) |
 | `ops` | `pipeline_runs`: rows fetched/inserted/errors/runtime per enrollment per run |
 
 ---
@@ -129,7 +129,45 @@ Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and 
 
 ## Dashboard
 
-Four tabs: **Net Worth**, **This Month**, **This Year** and **Transactions**. Category names, column headers and chart titles have hover tooltips explaining what they include. On line charts, click a line or its label to show only that line (Option-click hides it, double-click resets). On Monthly Spend by Category, an isolated category also shows its prior year dashed, and clicking off the lines shows every category for that month as bars.
+Six tabs: **Net Worth**, **Holdings**, **This Month**, **This Year**, **Transactions** and **Notes**. Holdings covers accounts linked to Plaid with the investments product; add it to an existing link with `scripts/plaid_create_link_token.py <LABEL>`. Category names, column headers and chart titles have hover tooltips explaining what they include. On line charts, click a line or its label to show only that line (Option-click hides it, double-click resets). On Monthly Spend by Category, an isolated category also shows its prior year dashed, and clicking off the lines shows every category for that month as bars.
+
+---
+
+## Investments
+
+The **Investments** tab breaks investment accounts down into holdings (ticker, value, cost basis, unrealized gain) and charts each holding's value against its cost basis over time.
+
+**Where the data comes from**
+
+| Data | Source | Lands in | Modeled as |
+|---|---|---|---|
+| Holdings and securities, daily | Plaid `/investments/holdings/get`, in the daily ingest | `bronze.plaid_holdings`, `bronze.plaid_securities` | `silver.fct_holdings`, `silver.dim_security` |
+| Trades (buys, sells, dividends), up to 24 months back | Plaid `/investments/transactions/get`, in the daily ingest | `bronze.plaid_investment_transactions` | `silver.stg_plaid__investment_transactions` (not charted yet) |
+| Tax lots (each purchase of the shares held now) | Part of each holding's payload | `bronze.plaid_holdings` | `silver.stg_plaid__tax_lots` |
+| Daily closing prices | Yahoo Finance, `scripts/backfill_prices.py` (run by hand) | `bronze.security_prices` | `silver.stg_yahoo__prices` |
+
+**Observed vs. reconstructed history.** Plaid only reports what is held *today*, so history is kept in two separate models:
+
+- `silver.fct_holdings`: **observed**. One row per holding per day, exactly as Plaid reported it. Builds up one day per ingest from the first snapshot on.
+- `silver.fct_holdings_reconstructed`: **rebuilt**, for the days before a holding's first snapshot. On each day, shares held = the tax lots bought on or before it, cost basis = what those lots cost, value = shares x that day's close (the last close on weekends and holidays).
+
+`gold.holdings_history` unions the two with a `source` column (`snapshot` or `reconstructed`), so anything downstream can tell them apart. The last reconstructed day matches the first snapshot exactly, since Plaid prices a morning snapshot at the previous close.
+
+**Limits of the reconstruction**
+
+- The lots only cover shares held now. Shares sold earlier are missing from both value and cost, so past value is understated for anything that was trimmed.
+- A holding is only reconstructed when its lots are complete: every lot dated, and together they match the latest snapshot's shares and cost basis. Others start at the first snapshot.
+- Funds with no public ticker (e.g. 401K target-date funds) have no Yahoo prices, and institutions often report no cost basis for them.
+- Prices are split-adjusted, not dividend-adjusted, so they multiply with today's (post-split) share counts. Reinvested dividends show up as their own lots.
+
+**Cost basis** is Plaid's `cost_basis`. When an institution leaves it blank but sends complete tax lots, their total is used instead (`stg_plaid__holdings`).
+
+**Adding an account**
+
+1. Give an existing Plaid link the investments product: `python3 scripts/plaid_create_link_token.py <LABEL>` (update mode, keeps the access token), or start a new link with a label that has no token yet. Open `scripts/plaid_link.html` and connect.
+2. The next daily ingest lands its holdings. Then run `scripts/backfill_prices.py` and a full `dbt run` to rebuild its history.
+
+Re-run `backfill_prices.py` after a stock split too: split-adjusted closes change for every earlier day. Always run dbt in full after changing holdings models: rebuilding a silver table drops the gold views built on it.
 
 ---
 

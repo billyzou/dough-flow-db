@@ -74,3 +74,11 @@ models:
         tests:
           - unique
           - not_null
+
+  - name: holdings_history
+    columns:
+      - name: source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['snapshot', 'reconstructed']

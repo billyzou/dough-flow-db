@@ -24,3 +24,17 @@ models:
         tests:
           - unique
           - not_null
+
+  - name: stg_plaid__securities
+    columns:
+      - name: security_id
+        tests:
+          - unique
+          - not_null
+
+  - name: stg_plaid__investment_transactions
+    columns:
+      - name: investment_transaction_id
+        tests:
+          - unique
+          - not_null

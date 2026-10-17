@@ -3,6 +3,8 @@
 ingest_plaid.py
 
 Pulls accounts and transactions from Plaid and lands them in bronze as raw JSON.
+Enrollments with the investments product also land holdings, securities and
+investment transactions.
 Cleaning (sign flip, pending filter, categories) happens in dbt, not here.
 New Plaid accounts are also registered in bronze.accounts so they get an account_id.
 """
@@ -20,6 +22,9 @@ import plaid
 from plaid.api import plaid_api
 from plaid.model.country_code import CountryCode
 from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
+from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
+from plaid.model.investments_transactions_get_request import InvestmentsTransactionsGetRequest
+from plaid.model.investments_transactions_get_request_options import InvestmentsTransactionsGetRequestOptions
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.products import Products
 from plaid.model.transactions_get_request import TransactionsGetRequest
@@ -69,18 +74,20 @@ def build_db_conn():
     )
 
 
-def fetch_institution_name(client, access_token):
+def fetch_item(client, access_token):
+    """Return (institution name, products the Item is billed for)."""
     item = client.item_get(ItemGetRequest(access_token=access_token))['item']
+    products = {str(p) for p in item['billed_products']}
     inst_id = item['institution_id']
     if not inst_id:
-        return None
+        return None, products
     inst = client.institutions_get_by_id(
         InstitutionsGetByIdRequest(
             institution_id=inst_id,
             country_codes=[CountryCode('US')],
         )
     )['institution']
-    return inst['name']
+    return inst['name'], products
 
 
 def fetch_transactions(client, access_token, start_date, end_date):
@@ -108,6 +115,36 @@ def fetch_transactions(client, access_token, start_date, end_date):
         offset += len(resp['transactions'])
 
     return accounts, all_txns
+
+
+def fetch_holdings(client, access_token):
+    resp = client.investments_holdings_get(InvestmentsHoldingsGetRequest(access_token=access_token))
+    return resp['holdings'], resp['securities']
+
+
+def fetch_investment_transactions(client, access_token, start_date, end_date):
+    """Fetch all investment transactions and the securities they reference, paginating until complete."""
+    all_txns, securities = [], []
+    offset = 0
+
+    while True:
+        resp = client.investments_transactions_get(
+            InvestmentsTransactionsGetRequest(
+                access_token=access_token,
+                start_date=start_date,
+                end_date=end_date,
+                options=InvestmentsTransactionsGetRequestOptions(count=500, offset=offset),
+            )
+        )
+        all_txns.extend(resp['investment_transactions'])
+        securities.extend(resp['securities'])
+        total = resp['total_investment_transactions']
+        log.info(f"  Fetched {len(all_txns)}/{total} investment transactions")
+        if len(all_txns) >= total:
+            break
+        offset += len(resp['investment_transactions'])
+
+    return all_txns, securities
 
 
 def to_json(plaid_model):
@@ -161,14 +198,49 @@ def land_transactions(conn, label, transactions):
     return seen, inserted, unchanged
 
 
+def land_investments(conn, label, holdings, securities, investment_transactions):
+    """Store today's holdings and securities, and new or changed investment transactions."""
+    with conn.cursor() as cur:
+        for h in holdings:
+            cur.execute("""
+                INSERT INTO bronze.plaid_holdings (enrollment, plaid_account_id, security_id, payload)
+                VALUES (%s, %s, %s, %s)
+            """, (label, h['account_id'], h['security_id'], to_json(h)))
+        # holdings and transactions can list the same security
+        for sec in {s['security_id']: s for s in securities}.values():
+            cur.execute("""
+                INSERT INTO bronze.plaid_securities (enrollment, security_id, payload)
+                VALUES (%s, %s, %s)
+            """, (label, sec['security_id'], to_json(sec)))
+        inserted = 0
+        for txn in investment_transactions:
+            payload = to_json(txn)
+            cur.execute("""
+                INSERT INTO bronze.plaid_investment_transactions (investment_transaction_id, payload_hash, enrollment, payload)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (investment_transaction_id, payload_hash) DO NOTHING
+            """, (txn['investment_transaction_id'], hashlib.md5(payload.encode()).hexdigest(), label, payload))
+            inserted += cur.rowcount
+
+    conn.commit()
+    log.info(f"  Holdings landed: {len(holdings)}, investment transactions new or changed: "
+             f"{inserted} of {len(investment_transactions)}")
+
+
 def ingest_enrollment(conn, client, label, token, start_date, end_date):
     log.info(f"--- Ingesting enrollment: {label} ---")
-    institution_name = fetch_institution_name(client, token)
+    institution_name, products = fetch_item(client, token)
     log.info(f"[{label}] Institution: {institution_name}")
     accounts, transactions = fetch_transactions(client, token, start_date, end_date)
     log.info(f"[{label}] Fetched {len(accounts)} accounts, {len(transactions)} transactions")
     land_accounts(conn, label, accounts, institution_name)
-    return land_transactions(conn, label, transactions)
+    result = land_transactions(conn, label, transactions)
+
+    if 'investments' in products:
+        holdings, securities = fetch_holdings(client, token)
+        inv_txns, inv_securities = fetch_investment_transactions(client, token, start_date, end_date)
+        land_investments(conn, label, holdings, securities + inv_securities, inv_txns)
+    return result
 
 
 def insert_pipeline_runs(conn, enrollment, started_at, finished_at, success, error_message, rows_seen, rows_inserted, rows_skipped):
