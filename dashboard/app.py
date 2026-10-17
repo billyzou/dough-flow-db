@@ -339,6 +339,22 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
         padding={'left': 5, 'top': 24 if month_bars is not None else 5, 'bottom': 5, 'right': 16})
 
 
+def rolling_chart(df, x_format):
+    # Holdings' trailing 1-year return against the S&P 500 (gray, as the reference), with a 0% line
+    series = ['Holdings', 'S&P 500']
+    df = df.melt('date', series, 'series', 'ret').dropna()
+    lines = alt.Chart(df).mark_line(strokeWidth=3).encode(
+        x=alt.X('date:T', title=None, axis=alt.Axis(
+            format=x_format, tickCount={'interval': 'year', 'step': 1} if x_format == '%Y' else alt.Undefined)),
+        y=alt.Y('ret:Q', title=None, axis=alt.Axis(format='.0%')),
+        color=alt.Color('series:N', sort=series, scale=alt.Scale(domain=series, range=[PALETTE[0], OTHER]),
+                        legend=alt.Legend(title=None, orient='top', labelColor=OTHER)),
+    )
+    zero = alt.Chart(pd.DataFrame({'ret': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(y='ret:Q')
+    _, rule = crosshair(df, 'date', 'series', 'ret', '+.1%', series)
+    return alt.layer(zero, lines, rule).properties(title=alt.Title('Rolling 1-year return', anchor='start', fontSize=14))
+
+
 def month_bar_layers(bars, start, end, y_format):
     # One month's categories as bars across the line chart's own axes: each bar gets a slot of the
     # date range (x is still the month scale) and its height in the same $ scale. Shown only while
@@ -449,6 +465,15 @@ def period_performance(rows, from_start):
     # value, with shares added or sold counted at that day's price, so neither deposit timing nor a
     # purchase discount (an ESPP buys below market) moves it. Reinvested dividends arrive as new
     # shares, so it's a price return. Returns (starting value, money in play, gain, return or None).
+    daily, start_value = daily_flows(rows, from_start)
+    put_in = start_value + daily['flow'].sum()
+    gain = daily['value'].iloc[-1] - put_in
+    returns = daily_returns(daily)
+    return start_value, put_in, gain, returns.prod() - 1 if len(returns) else None
+
+
+def daily_flows(rows, from_start):
+    # Each day's total value and flows (see period_performance), plus the value held at the start
     rows = rows.sort_values(['holding', 'date'])
     start, end = rows['date'].min(), rows['date'].max()
     first_row = rows.groupby('holding').cumcount() == 0
@@ -463,12 +488,20 @@ def period_performance(rows, from_start):
     exits = exits[exits['date'] < end]
     for date, value in zip(exits['date'], exits['value']):
         daily.loc[daily.index[daily.index > date][0], ['flow', 'market_flow']] -= value
-    start_value = rows.loc[at_start, 'value'].sum()
-    put_in = start_value + daily['flow'].sum()
-    gain = daily['value'].iloc[-1] - put_in
+    return daily, rows.loc[at_start, 'value'].sum()
+
+
+def daily_returns(daily):
+    # Each day's growth factor from market moves alone (1.01 = +1%), from daily_flows
     prev = daily['value'].shift()
-    returns = ((daily['value'] - daily['market_flow']) / prev)[prev > 0]
-    return start_value, put_in, gain, returns.prod() - 1 if len(returns) else None
+    return ((daily['value'] - daily['market_flow']) / prev)[prev > 0]
+
+
+def rolling_year(growth):
+    # Trailing 1-year return as of each day, from daily growth factors
+    index = growth.cumprod()
+    year_ago = index.shift(365, freq='D').reindex(index.index)
+    return (index / year_ago - 1).dropna()
 
 
 def escape_dollars(text):
@@ -920,6 +953,7 @@ with holdings_tab:
         st.info('No holdings match these filters.')
     else:
         rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
+        all_rows = rows
         # a period that starts before the selection's history begins counts from nothing held
         from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
         if RANGES[period]:
@@ -950,13 +984,31 @@ with holdings_tab:
             st.markdown(escape_dollars(
                 f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
                 "No cost basis reported, so this includes money added."))
-        st.altair_chart(
-            line_chart(lines, 'date', 'amount', 'series', '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
+        x_format = '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
+        chart_col, rolling_col = st.columns([2, 1])
+        chart_col.altair_chart(
+            line_chart(lines, 'date', 'amount', 'series', x_format,
                        {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
                        dotted=['Cost basis'])
             .properties(height=300),
             use_container_width=True,
         )
+
+        # Trailing 1-year return as of each day in the period, from the selection's whole history,
+        # next to the S&P 500's (both price returns; the benchmark at the previous close, like snapshots)
+        rolling = rolling_year(daily_returns(daily_flows(all_rows, True)[0])).rename('Holdings')
+        spy = query('select price_date, close from gold.benchmark_prices')
+        spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
+        spy = spy.reindex(pd.date_range(spy.index.min(), rolling.index.max() if len(rolling) else spy.index.max())).ffill().shift(1)
+        rolling = pd.concat([rolling, (spy / spy.shift(365) - 1).rename('S&P 500').reindex(rolling.index)], axis=1)
+        rolling = rolling[rolling.index >= perf['date'].min()]
+        if period == 'ALL':  # month-ends keep a multi-year line quick to hover, like the chart beside it
+            rolling = rolling[rolling.index.isin(rolling.groupby(rolling.index.to_period('M')).tail(1).index)]
+        if rolling.empty:
+            rolling_col.caption('Rolling 1-year return needs a year of history for this selection.')
+        else:
+            rolling_col.altair_chart(rolling_chart(rolling.rename_axis('date').reset_index(), x_format)
+                                     .properties(height=300), use_container_width=True)
     st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. Over a period "
                "shorter than the history, \"put in\" is the value at its start plus money added during it. The % is how the "
                "assets performed: each day's market move without that day's deposits, chained, so deposits (and "
