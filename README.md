@@ -144,7 +144,7 @@ The **Investments** tab breaks investment accounts down into holdings (ticker, v
 | Holdings and securities, daily | Plaid `/investments/holdings/get`, in the daily ingest | `bronze.plaid_holdings`, `bronze.plaid_securities` | `silver.fct_holdings`, `silver.dim_security` |
 | Trades (buys, sells, dividends), up to 24 months back | Plaid `/investments/transactions/get`, in the daily ingest | `bronze.plaid_investment_transactions` | `silver.stg_plaid__investment_transactions` (not charted yet) |
 | Tax lots (each purchase of the shares held now) | Part of each holding's payload | `bronze.plaid_holdings` | `silver.stg_plaid__tax_lots` |
-| Daily closing prices of held tickers, plus the SPY benchmark | Yahoo Finance, `scripts/backfill_prices.py` (run by hand) | `bronze.security_prices` | `silver.stg_yahoo__prices`, `gold.security_prices` |
+| Daily closing prices, plus the SPY benchmark | Yahoo Finance, `scripts/backfill_prices.py` (run by hand) | `bronze.security_prices` | `silver.stg_yahoo__prices`, `gold.security_prices` |
 
 **Observed vs. reconstructed history.** Plaid only reports what is held *today*, so history is kept in two separate models:
 
@@ -165,7 +165,9 @@ The **Investments** tab breaks investment accounts down into holdings (ticker, v
 
 **Performance headline.** For the selected holding and period, the dollar gain is against what was paid (value minus starting value and money added; a holding that appears mid-period arrives at market value unless it's a first purchase). The % is a time-weighted price return: each day's market move, with shares added or sold valued at that day's price, chained. Deposits, their timing and purchase discounts don't move it; reinvested dividends count as deposits.
 
-**Rolling 1-year return.** Its own section with its own period: on the left, the same time-weighted price return over the trailing year, as of each day, for the holdings picked in the Performance filters; on the right, up to four chosen tickers' price returns. Both against the S&P 500 (SPY's price return, at the previous close like the snapshots). The S&P line is a benchmark; history before the first snapshot only covers shares held now, so the older part flatters the holdings a little.
+**Layout.** Performance and Rolling 1-year return each have their own ticker, account and holding type filters and period. Each shows all holdings (with a cost basis) on the left and the filtered holdings on the right; the period controls both.
+
+**Rolling 1-year return.** The same time-weighted price return over the trailing year, as of each day, against the S&P 500 (SPY's price return, at the previous close like the snapshots). The S&P line is a benchmark; history before the first snapshot only covers shares held now, so the older part flatters the holdings a little.
 
 **Cost basis** is Plaid's `cost_basis`. When an institution leaves it blank but sends complete tax lots, their total is used instead (`stg_plaid__holdings`).
 

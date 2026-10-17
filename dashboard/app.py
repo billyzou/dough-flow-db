@@ -367,19 +367,126 @@ def fresh(container, name, key):
     # Streamlit's chart, updated in place (a new period, filter or data), keeps the datasets of its first
     # render and fails to load the new ones ("Unrecognized data set"), leaving it blank or without axes.
     # It keys a chart by its position, so when key changes, an empty placeholder before the chart comes
-    # or goes and the chart mounts fresh. Returns the container to draw the chart in
+    # or goes and the chart mounts fresh. The chart gets a container of its own, so elements appearing
+    # or disappearing above it can't cancel the shift. Returns the container to draw the chart in
     if st.session_state.get(f'{name}_data') != key:
         st.session_state[f'{name}_data'] = key
         st.session_state[f'{name}_version'] = st.session_state.get(f'{name}_version', 0) + 1
+    slot = container.container()
     if st.session_state[f'{name}_version'] % 2:
-        container.empty()
-    return container
+        slot.empty()
+    return slot
 
 
 def in_period(df, start, period):
     # Rows of a date-indexed frame from start on; 5Y and ALL keep month-ends so years of lines hover quickly
     df = df[df.index >= start] if start is not None else df
     return df[df.index.isin(df.groupby(df.index.to_period('M')).tail(1).index)] if period in ('5Y', 'ALL') else df
+
+
+RANGES = {'3M': 3, '6M': 6, '1Y': 12, '5Y': 60, 'ALL': None}
+EXCLUDED = 'Excludes cash and retirement accounts.'
+
+
+def holding_filters(history, latest, prefix):
+    # Ticker, account and holding type pickers (largest first) and a period, in one row
+    ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.7], vertical_alignment='bottom')
+    by_value = lambda column: list(latest.groupby(column)['value'].sum().sort_values(ascending=False).index)
+    filters = (
+        ticker_col.multiselect('Ticker', by_value('ticker'), placeholder='All', key=f'{prefix}_ticker'),
+        account_col.multiselect('Account', by_value('account'), placeholder='All', key=f'{prefix}_account'),
+        type_col.multiselect('Holding type', sorted(history['security_type'].unique()), placeholder='All',
+                             key=f'{prefix}_type'),
+    )
+    period = range_col.segmented_control('Period', list(RANGES), default='1Y', label_visibility='hidden',
+                                         key=f'{prefix}_period') or '1Y'
+    return filters, period
+
+
+def select_holdings(history, latest, filters):
+    # History rows of the holdings matching (tickers, accounts, types), an empty list meaning all, each
+    # with its first_seen date. Summing holdings with and without a cost basis would put value and cost
+    # basis on different holdings, so a mixed selection keeps only those with one. Returns (rows,
+    # whether any were left out)
+    tickers, accounts, types = filters
+    rows = history[history['ticker'].isin(tickers or history['ticker'])
+                   & history['account'].isin(accounts or history['account'])
+                   & history['security_type'].isin(types or history['security_type'])]
+    has_basis = rows['holding'].isin(latest.loc[latest['cost_basis'].notna(), 'holding'])
+    mixed = has_basis.any() and not has_basis.all()
+    if mixed:
+        rows = rows[has_basis]
+    return rows.assign(first_seen=rows.groupby('holding')['date'].transform('min')), mixed
+
+
+def period_start(end_date, period):
+    return end_date - pd.DateOffset(months=RANGES[period]) if RANGES[period] else None
+
+
+def performance_panel(container, rows, period, end_date, name):
+    # Headline (gain, put in, time-weighted %) and value vs cost basis chart for rows over the period
+    if rows.empty:
+        container.info('No holdings match these filters.')
+        return
+    start = period_start(end_date, period)
+    # a period that starts before the selection's history begins counts from nothing held
+    from_start = start is None or rows['date'].min() >= start
+    if start is not None:
+        rows = rows[rows['date'] >= start]
+    perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
+    has_basis = perf['cost_basis'].notna().any()
+    # 5Y and ALL span years of daily points, which makes hovering slow: plot each month's (5Y) or
+    # quarter's (ALL) last day, plus the first. The headline still uses every day
+    points = perf
+    if period in ('5Y', 'ALL'):
+        step = perf['date'].dt.to_period('M' if period == '5Y' else 'Q')
+        points = perf[perf['date'].isin(perf.groupby(step)['date'].max()) | (perf['date'] == perf['date'].min())]
+    lines = points.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
+    lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
+
+    now = perf.iloc[-1]
+    dates = f"{perf['date'].min():%b %d, %Y} – {perf['date'].max():%b %d, %Y}"
+    if has_basis:
+        start_value, put_in, change, twr = period_performance(rows, from_start)
+        pct = f' ({twr:+.1%})' if twr is not None else ''
+        container.markdown(escape_dollars(
+            f"**{money(now['value'])}** on {money(put_in)} put in: "
+            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"), help=(
+            "Gain: value now minus the value at the period's start and money added during it, so against what was "
+            "paid. \"Put in\" is that starting value plus money added (for the whole history, the cost basis). "
+            "The %: how the assets performed, each day's market move without that day's deposits, chained, so "
+            "deposits and buying at a discount don't move it. Reinvested dividends count as deposits."))
+    elif from_start:
+        container.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
+    else:
+        start_value = perf['value'].iloc[0]
+        change = now['value'] - start_value
+        container.markdown(escape_dollars(
+            f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
+            "No cost basis reported, so this includes money added."))
+    x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if period == '3M' else '%b %Y'
+    fresh(container, name, (period, len(perf), float(perf['value'].sum()), float(perf['cost_basis'].sum()))).altair_chart(
+        line_chart(lines, 'date', 'amount', 'series', x_format,
+                   {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
+                   dotted=['Cost basis'])
+        .properties(height=300),
+        use_container_width=True,
+    )
+
+
+def rolling_panel(container, rows, period, end_date, spy_rolling, name):
+    # Rows' trailing 1-year time-weighted return as of each day in the period, against the S&P 500's
+    growth = daily_returns(daily_flows(rows, True)[0]) if len(rows) else pd.Series(dtype=float)
+    rolling = rolling_year(growth) if len(growth) else growth
+    df = in_period(pd.concat([rolling.rename('Holdings'), spy_rolling.rename('S&P 500')], axis=1).reindex(rolling.index),
+                   period_start(end_date, period), period)
+    if df.empty:
+        container.caption('Needs a year of history for these holdings.')
+        return
+    x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if period == '3M' else '%b %Y'
+    fresh(container, name, (period, len(rows), float(rows['value'].sum()))).altair_chart(
+        rolling_chart(df.rename_axis('date').reset_index(), x_format, {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]})
+        .properties(height=300), use_container_width=True)
 
 
 def month_bar_layers(bars, start, end, y_format):
@@ -953,131 +1060,55 @@ with holdings_tab:
     history['holding'] = history['ticker'] + ' · ' + history['account']
     history['security_type'] = history['security_type'].str.title().replace({'Etf': 'ETF'})
     latest = history[history['date'] == history['date'].max()]
+    end_date = history['date'].max()
     first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
+    all_rows, _ = select_holdings(history, latest, ([], [], []))
+    rebuilt_note = (f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
+                    "and shares sold before then aren't counted.")
+
+    # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
     st.subheader('Performance', help=(
         "Value: what the holdings were worth each day. Cost basis (dotted): what you've put in, as the institution "
-        f"reports it. From {first_snapshot:%b %d, %Y} both come from Plaid's daily snapshots; before that they're "
-        "rebuilt from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
-        "so shares since sold aren't counted and performance there is likely inaccurate. Rolling 1-year return: the trailing year's return as of each day, "
-        "against the S&P 500. More in the Notes tab."))
-    RANGES = {'3M': 3, '6M': 6, '1Y': 12, '5Y': 60, 'ALL': None}
-    ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.7], vertical_alignment='bottom')
-    # largest first
-    tickers = ticker_col.multiselect('Ticker', list(latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index),
-                                     placeholder='All')
-    chosen_accounts = account_col.multiselect('Account', list(latest.groupby('account')['value'].sum().sort_values(ascending=False).index),
-                                              placeholder='All')
-    types = type_col.multiselect('Holding type', sorted(history['security_type'].unique()), placeholder='All')
-    period = range_col.segmented_control('Period', list(RANGES), default='1Y', label_visibility='hidden') or '1Y'
+        "reports it. Left: all holdings with a cost basis. Right: the holdings picked in the filters. From "
+        f"{first_snapshot:%b %d, %Y} both lines come from Plaid's daily snapshots; before that they're rebuilt from "
+        "the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), so shares since "
+        "sold aren't counted and performance there is likely inaccurate. More in the Notes tab."))
+    filters, period = holding_filters(history, latest, 'performance')
+    if RANGES[period] is None or period_start(end_date, period) < first_snapshot:
+        st.caption(rebuilt_note)
+    selected, mixed = select_holdings(history, latest, filters)
+    all_col, selected_col = st.columns(2)
+    all_col.subheader('All holdings')
+    all_col.caption(EXCLUDED)
+    performance_panel(all_col, all_rows, period, end_date, 'performance_all')
+    selected_col.subheader('Selected holdings')
+    if mixed:
+        selected_col.caption(EXCLUDED)
+    performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
-    rows = history[history['ticker'].isin(tickers or history['ticker'])
-                   & history['account'].isin(chosen_accounts or history['account'])
-                   & history['security_type'].isin(types or history['security_type'])]
-    # summing holdings with and without a cost basis would put the two lines on different
-    # holdings, so a mixed selection keeps only those with one
-    with_basis = latest.loc[latest['cost_basis'].notna(), 'holding']
-    left_out = latest[latest['holding'].isin(rows['holding']) & ~latest['holding'].isin(with_basis)]
-    if rows['holding'].isin(with_basis).any() and len(left_out):
-        rows = rows[rows['holding'].isin(with_basis)]
-        st.caption('Excludes cash and retirement accounts.')
-    rows = rows.assign(first_seen=rows.groupby('holding')['date'].transform('min'))
-    all_rows = rows
-    if rows.empty:
-        st.info('No holdings match these filters.')
-    else:
-        # a period that starts before the selection's history begins counts from nothing held
-        from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
-        if RANGES[period]:
-            rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
-        perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
-        has_basis = perf['cost_basis'].notna().any()
-        # 5Y and ALL span years of daily points, which makes hovering slow: plot each month's (5Y) or
-        # quarter's (ALL) last day, plus the first. The headline still uses every day
-        points = perf
-        if period in ('5Y', 'ALL'):
-            step = perf['date'].dt.to_period('M' if period == '5Y' else 'Q')
-            points = perf[perf['date'].isin(perf.groupby(step)['date'].max()) | (perf['date'] == perf['date'].min())]
-        lines = points.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
-        lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
-
-        now = perf.iloc[-1]
-        dates = f"{perf['date'].min():%b %d, %Y} – {perf['date'].max():%b %d, %Y}"
-        if has_basis:
-            start_value, put_in, change, twr = period_performance(rows, from_start)
-            pct = f' ({twr:+.1%})' if twr is not None else ''
-            st.markdown(escape_dollars(
-                f"**{money(now['value'])}** on {money(put_in)} put in: "
-                f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"), help=(
-            "Gain: value now minus the value at the period's start and money added during it, so against what was "
-            "paid. \"Put in\" is that starting value plus money added (for the whole history, the cost basis). "
-            "The %: how the assets performed, each day's market move without that day's deposits, chained, so "
-            "deposits and buying at a discount don't move it. Reinvested dividends count as deposits."))
-        elif from_start:
-            st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
-        else:
-            start_value = perf['value'].iloc[0]
-            change = now['value'] - start_value
-            st.markdown(escape_dollars(
-                f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
-                "No cost basis reported, so this includes money added."))
-        if (rows['source'] == 'reconstructed').any():
-            st.caption(f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
-                       "and shares sold before then aren't counted.")
-        x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
-        data_key = (period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(perf), float(perf['value'].sum()))
-        fresh(st.container(), 'performance', data_key).altair_chart(
-            line_chart(lines, 'date', 'amount', 'series', x_format,
-                       {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
-                       dotted=['Cost basis'])
-            .properties(height=300),
-            use_container_width=True,
-        )
-
-    # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY): the
-    # Performance selection on the left, chosen tickers on the right. Prices are taken at the previous
-    # close, like the morning snapshots
+    # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
+    # previous close, like the morning snapshots
     st.subheader('Rolling 1-year return', help=(
-        "Each day's return over the year before it, against the S&P 500 (SPY). Left: the holdings picked in the "
-        "Performance filters, time-weighted so deposits don't count. Right: the tickers picked here, from "
-        "their prices. Both are price returns, without dividends. Holdings history before "
-        f"{first_snapshot:%b %d, %Y} is rebuilt, so the left chart is approximate there."))
-    priced = query('select ticker, price_date, close from gold.security_prices')
-    closes = priced.assign(price_date=pd.to_datetime(priced['price_date'])).pivot(index='price_date', columns='ticker', values='close')
-    end_date = history['date'].max()
-    closes = closes.reindex(pd.date_range(closes.index.min(), end_date)).ffill().shift(1)
-    price_rolling = (closes / closes.shift(365) - 1).rename(columns={'SPY': 'S&P 500'})
-    compare_col, rolling_range_col = st.columns([6, 1.7], vertical_alignment='bottom')
-    choices = [t for t in latest.groupby('ticker')['value'].sum().sort_values(ascending=False).index
-               if t in closes.columns and t != 'SPY']
-    compare = compare_col.multiselect('Compare tickers', choices, default=choices[:1], max_selections=4,
-                                      placeholder='Pick tickers')
-    rolling_period = rolling_range_col.segmented_control('Rolling period', list(RANGES), default='1Y',
-                                                         label_visibility='hidden', key='rolling_period') or '1Y'
-    rolling_start = end_date - pd.DateOffset(months=RANGES[rolling_period]) if RANGES[rolling_period] else None
-    rolling_format = '%Y' if rolling_period in ('5Y', 'ALL') else '%b %d' if rolling_period == '3M' else '%b %Y'
-    holdings_col, tickers_col = st.columns(2)
-    holdings_col.subheader('Holdings vs S&P 500')
-    tickers_col.subheader('Tickers vs S&P 500')
-
-    holdings_rolling = rolling_year(daily_returns(daily_flows(all_rows, True)[0])) if len(all_rows) else pd.Series(dtype=float)
-    holdings_rolling = in_period(pd.concat([holdings_rolling.rename('Holdings'), price_rolling['S&P 500']], axis=1)
-                                 .reindex(holdings_rolling.index), rolling_start, rolling_period)
-    if holdings_rolling.empty:
-        holdings_col.caption('Needs a year of history for the holdings picked in the Performance filters.')
-    else:
-        fresh(holdings_col, 'rolling_holdings', (rolling_period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(all_rows))).altair_chart(
-            rolling_chart(holdings_rolling.rename_axis('date').reset_index(), rolling_format,
-                          {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]})
-            .properties(height=300), use_container_width=True)
-
-    ticker_rolling = in_period(price_rolling[compare + ['S&P 500']].dropna(how='all'), rolling_start, rolling_period)
-    if not compare:
-        tickers_col.caption('Pick tickers to compare with the S&P 500.')
-    else:
-        fresh(tickers_col, 'rolling_tickers', (rolling_period, tuple(compare))).altair_chart(
-            rolling_chart(ticker_rolling.rename_axis('date').reset_index(), rolling_format,
-                          {**dict(zip(compare, PALETTE)), 'S&P 500': PALETTE[0]})
-            .properties(height=300), use_container_width=True)
+        "Each day's return over the year before it, time-weighted so deposits don't count, against the S&P 500 "
+        "(SPY). Left: all holdings with a cost basis. Right: the holdings picked in the filters. Both are price "
+        f"returns, without dividends. Holdings history before {first_snapshot:%b %d, %Y} is rebuilt, so the "
+        "charts are approximate there."))
+    rolling_filters, rolling_period = holding_filters(history, latest, 'rolling')
+    if RANGES[rolling_period] is None or period_start(end_date, rolling_period) - pd.DateOffset(years=1) < first_snapshot:
+        st.caption(rebuilt_note)
+    spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
+    spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
+    spy = spy.reindex(pd.date_range(spy.index.min(), end_date)).ffill().shift(1)
+    spy_rolling = spy / spy.shift(365) - 1
+    rolling_selected, rolling_mixed = select_holdings(history, latest, rolling_filters)
+    all_col, selected_col = st.columns(2)
+    all_col.subheader('All holdings vs S&P 500')
+    all_col.caption(EXCLUDED)
+    rolling_panel(all_col, all_rows, rolling_period, end_date, spy_rolling, 'rolling_all')
+    selected_col.subheader('Selected holdings vs S&P 500')
+    if rolling_mixed:
+        selected_col.caption(EXCLUDED)
+    rolling_panel(selected_col, rolling_selected, rolling_period, end_date, spy_rolling, 'rolling_selected')
 
     st.subheader('Holdings')
     holdings['security_type'] = holdings['security_type'].str.title().replace({'Etf': 'ETF'})
@@ -1136,7 +1167,9 @@ with notes_tab:
   Deposits, their timing and purchase discounts don't move it. Reinvested dividends arrive as new shares,
   so they count as deposits, and the % runs a little under a total return.
 - **Rolling 1-year return:** that % over the trailing year, as of each day, against the S&P 500's price
-  return (SPY), for the holdings picked in the Performance filters; beside it, the same for chosen tickers. A mix with bonds, gold or international funds should trail it in years US large caps lead.
+  return (SPY).
+- **Layout:** each section shows all holdings on the left and the ones picked in its own filters on the
+  right; its period controls both. A mix with bonds, gold or international funds should trail it in years US large caps lead.
 - **All with a cost basis:** a selection that mixes holdings with and without a cost basis leaves out the
   ones without, so value and cost basis cover the same holdings.
 """)
