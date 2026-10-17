@@ -937,7 +937,7 @@ with holdings_tab:
         "Value: what the holdings were worth each day. Cost basis (dotted): what you've put in, as the institution "
         f"reports it. From {first_snapshot:%b %d, %Y} both come from Plaid's daily snapshots; before that they're "
         "rebuilt from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
-        "so shares since sold aren't counted. Rolling 1-year return: the trailing year's return as of each day, "
+        "so shares since sold aren't counted and performance there is likely inaccurate. Rolling 1-year return: the trailing year's return as of each day, "
         "against the S&P 500. More in the Notes tab."))
     RANGES = {'3M': 3, '6M': 6, '1Y': 12, 'ALL': None}
     ticker_col, account_col, type_col, range_col = st.columns([2, 2, 2, 1.4], vertical_alignment='bottom')
@@ -999,6 +999,9 @@ with holdings_tab:
             st.markdown(escape_dollars(
                 f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
                 "No cost basis reported, so this includes money added."))
+        if (rows['source'] == 'reconstructed').any():
+            st.caption(f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
+                       "and shares sold before then aren't counted.")
         x_format = '%Y' if period == 'ALL' else '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y'
         chart_col, rolling_col = st.columns([2, 1])
         chart_col.altair_chart(
@@ -1072,7 +1075,8 @@ with notes_tab:
   snapshot and each day's closing price from Yahoo Finance, priced at the previous close like Plaid's
   morning snapshots. Shares sold before then aren't counted, so the rebuilt past reads low for accounts
   that sell often (a robo-advisor rebalancing or harvesting losses). Holdings without complete purchase
-  records start at the first snapshot.
+  records start at the first snapshot. **Treat performance before the first snapshot as approximate:** the
+  rebuild can't see past sales, so returns there (including the rolling 1-year return) are likely off.
 - **Put in:** for the whole history, the cost basis. For a shorter period, the value at its start plus
   money added during it.
 - **Gain** is value now minus what was put in, so it's against what was paid and includes a purchase
