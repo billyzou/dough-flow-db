@@ -144,7 +144,7 @@ The **Investments** tab breaks investment accounts down into holdings (ticker, v
 | Holdings and securities, daily | Plaid `/investments/holdings/get`, in the daily ingest | `bronze.plaid_holdings`, `bronze.plaid_securities` | `silver.fct_holdings`, `silver.dim_security` |
 | Trades (buys, sells, dividends), up to 24 months back | Plaid `/investments/transactions/get`, in the daily ingest | `bronze.plaid_investment_transactions` | `silver.stg_plaid__investment_transactions` (not charted yet) |
 | Tax lots (each purchase of the shares held now) | Part of each holding's payload | `bronze.plaid_holdings` | `silver.stg_plaid__tax_lots` |
-| Daily closing prices | Yahoo Finance, `scripts/backfill_prices.py` (run by hand) | `bronze.security_prices` | `silver.stg_yahoo__prices` |
+| Daily closing prices, plus the SPY benchmark | Yahoo Finance, `scripts/backfill_prices.py` (run by hand) | `bronze.security_prices` | `silver.stg_yahoo__prices`, `gold.benchmark_prices` |
 
 **Observed vs. reconstructed history.** Plaid only reports what is held *today*, so history is kept in two separate models:
 
@@ -164,6 +164,8 @@ The **Investments** tab breaks investment accounts down into holdings (ticker, v
 - Prices are split-adjusted, not dividend-adjusted, so they multiply with today's (post-split) share counts. Reinvested dividends show up as their own lots.
 
 **Performance headline.** For the selected holding and period, the dollar gain is against what was paid (value minus starting value and money added; a holding that appears mid-period arrives at market value unless it's a first purchase). The % is a time-weighted price return: each day's market move, with shares added or sold valued at that day's price, chained. Deposits, their timing and purchase discounts don't move it; reinvested dividends count as deposits.
+
+**Rolling 1-year return.** Beside the performance chart: the same time-weighted price return over the trailing year, as of each day, for the selected holdings and for the S&P 500 (SPY's price return, at the previous close like the snapshots). The S&P line is a benchmark; history before the first snapshot only covers shares held now, so the older part flatters the holdings a little.
 
 **Cost basis** is Plaid's `cost_basis`. When an institution leaves it blank but sends complete tax lots, their total is used instead (`stg_plaid__holdings`).
 

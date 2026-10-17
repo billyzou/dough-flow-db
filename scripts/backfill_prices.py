@@ -3,7 +3,7 @@
 backfill_prices.py
 
 Fetches daily closing prices from Yahoo Finance for every ticker that has Plaid tax lots,
-from its first purchase to today, into bronze.security_prices. dbt multiplies them with the
+from its first purchase to today, plus the SPY benchmark, into bronze.security_prices. dbt multiplies them with the
 lots to rebuild each holding's value before its first Plaid snapshot
 (silver.fct_holdings_reconstructed).
 
@@ -59,13 +59,18 @@ def main():
         password=os.environ['DB_PASSWORD'],
     )
     with conn.cursor() as cur:
+        # plus the benchmark (gold.benchmark_prices), from the first purchase of anything
         cur.execute("""
-            select s.ticker, min(l.purchase_date)
-            from silver.stg_plaid__tax_lots l
-            join silver.dim_security s using (security_id)
-            where s.ticker is not null and s.security_type <> 'cash' and l.purchase_date is not null
-            group by s.ticker
-            order by s.ticker
+            with lots as (
+                select s.ticker, l.purchase_date
+                from silver.stg_plaid__tax_lots l
+                join silver.dim_security s using (security_id)
+                where s.ticker is not null and s.security_type <> 'cash' and l.purchase_date is not null
+            )
+            select ticker, min(purchase_date)
+            from (select * from lots union all select 'SPY', min(purchase_date) from lots) t
+            group by ticker
+            order by ticker
         """)
         tickers = cur.fetchall()
     log.info(f"Fetching prices for {len(tickers)} tickers")
