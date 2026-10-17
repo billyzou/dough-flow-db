@@ -169,14 +169,14 @@ def spread_labels(values, gap, floor=None, top=None):
 
 
 def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, floor=None, show_value=False,
-               tooltip=None, cursor=alt.Undefined, label_y=None):
+               tooltip=None, cursor=alt.Undefined, label_y=None, value_text=None):
     # Name each series just past the chart's right edge instead of using a legend, each with a dot
     # in its series color beside it. Labels that would overlap are spread apart around their lines,
     # and a thin connector joins each line's end to its label. label_y: a column of positions already
-    # worked out, used instead.
+    # worked out, used instead. value_text: formats the shown value (dollars by default).
     ends = ends.sort_values(y).copy()
     ends['label_y'] = ends[label_y] if label_y else spread_labels(ends[y].tolist(), gap, floor, top)
-    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {money(v)}') if show_value else '')
+    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {(value_text or money)(v)}') if show_value else '')
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
     if tooltip:
         chart = chart.encode(tooltip=tooltip)
@@ -343,16 +343,22 @@ def rolling_chart(df, x_format):
     # Holdings' trailing 1-year return against the S&P 500 (gray, as the reference), with a 0% line
     series = ['Holdings', 'S&P 500']
     df = df.melt('date', series, 'series', 'ret').dropna()
+    color_scale = alt.Scale(domain=series, range=[PALETTE[0], OTHER])
+    x = alt.X('date:T', title=None, axis=alt.Axis(
+        format=x_format, tickCount={'interval': 'year', 'step': 1} if x_format == '%Y' else alt.Undefined))
     lines = alt.Chart(df).mark_line(strokeWidth=3).encode(
-        x=alt.X('date:T', title=None, axis=alt.Axis(
-            format=x_format, tickCount={'interval': 'year', 'step': 1} if x_format == '%Y' else alt.Undefined)),
-        y=alt.Y('ret:Q', title=None, axis=alt.Axis(format='.0%')),
-        color=alt.Color('series:N', sort=series, scale=alt.Scale(domain=series, range=[PALETTE[0], OTHER]),
-                        legend=alt.Legend(title=None, orient='top', labelColor=OTHER)),
+        x=x, y=alt.Y('ret:Q', title=None, axis=alt.Axis(format='.0%')),
+        color=alt.Color('series:N', scale=color_scale, legend=None),
     )
     zero = alt.Chart(pd.DataFrame({'ret': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(y='ret:Q')
     _, rule = crosshair(df, 'date', 'series', 'ret', '+.1%', series)
-    return alt.layer(zero, lines, rule).properties(title=alt.Title('Rolling 1-year return', anchor='start', fontSize=14))
+    ends = df[df['date'] == df['date'].max()]
+    labels = end_labels(ends, x, 'ret', 'series', color_scale, '.0%', gap=(df['ret'].max() - df['ret'].min()) * 0.06,
+                        show_value=True, value_text=lambda v: f'{v:+.1%}')
+    # same right padding as line_chart, so the labels past the plot's edge aren't clipped
+    return alt.layer(zero, lines, rule, *labels).properties(
+        title=alt.Title('Rolling 1-year return', anchor='start', fontSize=14),
+        padding={'left': 5, 'top': 5, 'bottom': 5, 'right': 16})
 
 
 def month_bar_layers(bars, start, end, y_format):
