@@ -8,7 +8,8 @@ select
     case when s.security_type = 'cash' then 'Cash'  -- Plaid's ticker is CUR:USD
          else coalesce(s.ticker, s.security_name) end as ticker,
     s.security_name,
-    s.security_type,
+    -- 401K funds are mutual funds or trusts like them, whatever type the institution reports
+    case when a.account_name ~* '\m401k\M' then 'mutual fund' else s.security_type end as security_type,
     h.quantity,
     h.price,
     h.value,

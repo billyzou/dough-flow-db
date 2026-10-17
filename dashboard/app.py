@@ -969,8 +969,7 @@ with holdings_tab:
         {'Value': cents, 'Cost Basis': cents, 'Gain': signed_cents, 'Gain %': '{:+.1%}'},
         help={
             'Type': "ETF: exchange-traded fund. Equity: a single company's stock. Mutual Fund: a pooled fund "
-                    "priced once a day. Cash: uninvested cash. Types come from the institution, which sometimes "
-                    "labels a 401K fund as Equity.",
+                    "priced once a day; every 401K holding is shown as one. Cash: uninvested cash.",
             'Cost Basis': "What you paid in total for the shares you hold now, as reported by the institution. "
                           "Blank when it doesn't report one.",
             'Gain': "Value minus cost basis: what you'd make if you sold today, before taxes.",
