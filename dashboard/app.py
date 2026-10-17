@@ -1041,8 +1041,22 @@ with net_worth_tab:
 
 # ---------- Holdings: what's in my investment accounts? ----------
 with holdings_tab:
-    st.caption("Wife's investments are not included yet: her accounts aren't linked to Plaid for holdings (see Notes).")
     holdings = query('select * from gold.holdings where snapshot_date = (select max(snapshot_date) from gold.holdings)')
+    history = query('select snapshot_date as date, source, ticker, account, security_type, quantity, price, '
+                    'value, cost_basis from gold.holdings_history')
+    history['date'] = pd.to_datetime(history['date'])
+    history['holding'] = history['ticker'] + ' · ' + history['account']
+    history['security_type'] = history['security_type'].str.title().replace({'Etf': 'ETF'})
+    latest = history[history['date'] == history['date'].max()]
+    end_date = history['date'].max()
+    first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
+    all_rows, _ = select_holdings(history, latest, ([], [], []))
+    st.caption(
+        "Wife's investments are not included yet: her accounts aren't linked to Plaid for holdings (see Notes).  \n"
+        f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, and shares "
+        "sold before then aren't counted.  \n"
+        f"As of {pd.to_datetime(holdings['snapshot_date'].max()):%b %d, %Y}. Accounts linked to Plaid with "
+        "investments access only; see the Notes tab for the ones still to link.")
     with_basis = holdings[holdings['cost_basis'].notna()]
     gain = with_basis['gain'].sum()
 
@@ -1054,17 +1068,6 @@ with holdings_tab:
                        height='stretch', help="Value of holdings with no reported cost basis, so no gain: the 401K "
                                               "funds and cash")
 
-    history = query('select snapshot_date as date, source, ticker, account, security_type, quantity, price, '
-                    'value, cost_basis from gold.holdings_history')
-    history['date'] = pd.to_datetime(history['date'])
-    history['holding'] = history['ticker'] + ' · ' + history['account']
-    history['security_type'] = history['security_type'].str.title().replace({'Etf': 'ETF'})
-    latest = history[history['date'] == history['date'].max()]
-    end_date = history['date'].max()
-    first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
-    all_rows, _ = select_holdings(history, latest, ([], [], []))
-    rebuilt_note = (f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, "
-                    "and shares sold before then aren't counted.")
 
     # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
     st.subheader('Performance', help=(
@@ -1074,40 +1077,30 @@ with holdings_tab:
         "the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), so shares since "
         "sold aren't counted and performance there is likely inaccurate. More in the Notes tab."))
     filters, period = holding_filters(history, latest, 'performance')
-    if RANGES[period] is None or period_start(end_date, period) < first_snapshot:
-        st.caption(rebuilt_note)
     selected, mixed = select_holdings(history, latest, filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All holdings')
-    all_col.caption(EXCLUDED)
+    all_col.subheader('All holdings vs Cost Basis', help=EXCLUDED)
     performance_panel(all_col, all_rows, period, end_date, 'performance_all')
-    selected_col.subheader('Selected holdings')
-    if mixed:
-        selected_col.caption(EXCLUDED)
+    selected_col.subheader('Selected holdings vs Cost Basis', help=EXCLUDED if mixed else None)
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
     # previous close, like the morning snapshots
-    st.subheader('Rolling 1-year return', help=(
+    st.subheader('Rolling 1-Year Return', help=(
         "Each day's return over the year before it, time-weighted so deposits don't count, against the S&P 500 "
         "(SPY). Left: all holdings with a cost basis. Right: the holdings picked in the filters. Both are price "
         f"returns, without dividends. Holdings history before {first_snapshot:%b %d, %Y} is rebuilt, so the "
         "charts are approximate there."))
     rolling_filters, rolling_period = holding_filters(history, latest, 'rolling')
-    if RANGES[rolling_period] is None or period_start(end_date, rolling_period) - pd.DateOffset(years=1) < first_snapshot:
-        st.caption(rebuilt_note)
     spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
     spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
     spy = spy.reindex(pd.date_range(spy.index.min(), end_date)).ffill().shift(1)
     spy_rolling = spy / spy.shift(365) - 1
     rolling_selected, rolling_mixed = select_holdings(history, latest, rolling_filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All holdings vs S&P 500')
-    all_col.caption(EXCLUDED)
+    all_col.subheader('All holdings vs S&P 500', help=EXCLUDED)
     rolling_panel(all_col, all_rows, rolling_period, end_date, spy_rolling, 'rolling_all')
-    selected_col.subheader('Selected holdings vs S&P 500')
-    if rolling_mixed:
-        selected_col.caption(EXCLUDED)
+    selected_col.subheader('Selected holdings vs S&P 500', help=EXCLUDED if rolling_mixed else None)
     rolling_panel(selected_col, rolling_selected, rolling_period, end_date, spy_rolling, 'rolling_selected')
 
     st.subheader('Holdings')
@@ -1130,8 +1123,6 @@ with holdings_tab:
         },
         colored=('Gain', 'Gain %'),
     )
-    st.caption(f"As of {pd.to_datetime(holdings['snapshot_date'].max()):%b %d, %Y}. Accounts linked to Plaid with "
-               "investments access only; see the Notes tab for the ones still to link.")
 
 # ---------- Notes ----------
 with notes_tab:
