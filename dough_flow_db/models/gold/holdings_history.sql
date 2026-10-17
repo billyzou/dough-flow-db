@@ -13,6 +13,9 @@ select
     h.snapshot_date,
     h.source,
     a.institution || ' · ' || a.account_name as account,
+    -- same rule as daily_balances' account_group
+    case when a.account_name ~* '\m(401k|ira)\M' then 'Retirement' else 'Investments' end as account_group,
+    s.security_type,
     case when s.security_type = 'cash' then 'Cash'  -- Plaid's ticker is CUR:USD
          else coalesce(s.ticker, s.security_name) end as ticker,
     h.quantity,
