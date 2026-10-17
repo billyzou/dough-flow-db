@@ -866,6 +866,8 @@ with holdings_tab:
 
     # the total only sums holdings with a cost basis, so its two lines compare like for like
     rows = history[history['cost_basis'].notna()] if picked == ALL else history[history['holding'] == picked]
+    # a period that starts before the selection's history begins counts from nothing held
+    from_start = not RANGES[period] or rows['date'].min() >= history['date'].max() - pd.DateOffset(months=RANGES[period])
     if RANGES[period]:
         rows = rows[rows['date'] >= history['date'].max() - pd.DateOffset(months=RANGES[period])]
     perf = rows.groupby('date', as_index=False)[['value', 'cost_basis']].sum(min_count=1)
@@ -873,14 +875,25 @@ with holdings_tab:
     lines = perf.melt('date', ['value', 'cost_basis'] if has_basis else ['value'], 'series', 'amount').dropna()
     lines['series'] = lines['series'].map({'value': 'Value', 'cost_basis': 'Cost basis'})
 
-    now = perf.iloc[-1]
+    # Over the period: gain = change in value minus money added (change in cost basis), as a share
+    # of what was in play (the starting value plus money added)
+    start, now = perf.iloc[0], perf.iloc[-1]
+    start_value, start_basis = (0, 0) if from_start else (start['value'], start['cost_basis'])
+    dates = f"{perf['date'].min():%b %d, %Y} – {perf['date'].max():%b %d, %Y}"
     if has_basis:
-        change = now['value'] - now['cost_basis']
+        put_in = start_value + now['cost_basis'] - start_basis
+        change = now['value'] - put_in
+        pct = f' ({change / put_in:+.1%})' if put_in > 0 else ''
         st.markdown(escape_dollars(
-            f"**{money(now['value'])}** on {money(now['cost_basis'])} put in: "
-            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)} ({change / now['cost_basis']:+.1%})]"))
-    else:
+            f"**{money(now['value'])}** on {money(put_in)} put in: "
+            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"))
+    elif from_start:
         st.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
+    else:
+        change = now['value'] - start_value
+        st.markdown(escape_dollars(
+            f"**{money(now['value'])}**: {money(change, sign=True)} ({change / start_value:+.1%}) · {dates}. "
+            "No cost basis reported, so this includes money added."))
     st.altair_chart(
         line_chart(lines, 'date', 'amount', 'series', '%b %d' if perf['date'].min() > perf['date'].max() - pd.DateOffset(months=6) else '%b %Y',
                    {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
@@ -888,7 +901,8 @@ with holdings_tab:
         .properties(height=300),
         use_container_width=True,
     )
-    st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. From "
+    st.caption(f"Cost basis is what you've put into the holding, as the institution reports it. Over a period "
+               "shorter than the history, \"put in\" is the value at its start plus money added during it. From "
                f"{first_snapshot:%b %d, %Y} both lines are Plaid's daily snapshots. Before that they're rebuilt "
                "from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), "
                "so shares since sold aren't counted. Holdings without complete purchase records start at the "
