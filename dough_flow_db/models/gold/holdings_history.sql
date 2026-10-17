@@ -2,10 +2,10 @@
 -- comes from: 'snapshot' is what Plaid reported (fct_holdings), 'reconstructed' is rebuilt from
 -- tax lots and Yahoo prices before the first snapshot (fct_holdings_reconstructed).
 with history as (
-    select account_id, security_id, snapshot_date, value, cost_basis, 'snapshot' as source
+    select account_id, security_id, snapshot_date, quantity, price, value, cost_basis, 'snapshot' as source
     from {{ ref('fct_holdings') }}
     union all
-    select account_id, security_id, snapshot_date, value, cost_basis, 'reconstructed'
+    select account_id, security_id, snapshot_date, quantity, price, value, cost_basis, 'reconstructed'
     from {{ ref('fct_holdings_reconstructed') }}
 )
 
@@ -15,6 +15,8 @@ select
     a.institution || ' · ' || a.account_name as account,
     case when s.security_type = 'cash' then 'Cash'  -- Plaid's ticker is CUR:USD
          else coalesce(s.ticker, s.security_name) end as ticker,
+    h.quantity,
+    h.price,
     h.value,
     h.cost_basis
 from history h
