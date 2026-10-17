@@ -340,8 +340,8 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
 
 
 def rolling_chart(df, x_format, colors, title):
-    # Trailing 1-year returns (columns of df named in colors), the S&P 500 in gray as the reference,
-    # with a 0% line
+    # Trailing 1-year returns (columns of df named in colors), the S&P 500 as the reference in blue
+    # dotted (like cost basis on the performance chart), with a 0% line
     series = list(colors)
     df = df.melt('date', series, 'series', 'ret').dropna()
     color_scale = alt.Scale(domain=series, range=list(colors.values()))
@@ -350,6 +350,8 @@ def rolling_chart(df, x_format, colors, title):
     lines = alt.Chart(df).mark_line(strokeWidth=3).encode(
         x=x, y=alt.Y('ret:Q', title=None, axis=alt.Axis(format='.0%')),
         color=alt.Color('series:N', scale=color_scale, legend=None),
+        strokeDash=alt.StrokeDash('series:N', legend=None, scale=alt.Scale(
+            domain=series, range=[[3, 4] if s == 'S&P 500' else [1, 0] for s in series])),
     )
     zero = alt.Chart(pd.DataFrame({'ret': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(y='ret:Q')
     _, rule = crosshair(df, 'date', 'series', 'ret', '+.1%', series)
@@ -1063,7 +1065,7 @@ with holdings_tab:
     else:
         fresh(holdings_col, 'rolling_holdings', (rolling_period, tuple(tickers), tuple(chosen_accounts), tuple(types), len(all_rows))).altair_chart(
             rolling_chart(holdings_rolling.rename_axis('date').reset_index(), rolling_format,
-                          {'Holdings': PALETTE[0], 'S&P 500': OTHER}, 'Holdings vs S&P 500')
+                          {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]}, 'Holdings vs S&P 500')
             .properties(height=300), use_container_width=True)
 
     ticker_rolling = in_period(price_rolling[compare + ['S&P 500']].dropna(how='all'), rolling_start, rolling_period)
@@ -1072,7 +1074,7 @@ with holdings_tab:
     else:
         fresh(tickers_col, 'rolling_tickers', (rolling_period, tuple(compare))).altair_chart(
             rolling_chart(ticker_rolling.rename_axis('date').reset_index(), rolling_format,
-                          {**dict(zip(compare, PALETTE)), 'S&P 500': OTHER}, 'Tickers vs S&P 500')
+                          {**dict(zip(compare, PALETTE)), 'S&P 500': PALETTE[0]}, 'Tickers vs S&P 500')
             .properties(height=300), use_container_width=True)
 
     st.subheader('Holdings')
