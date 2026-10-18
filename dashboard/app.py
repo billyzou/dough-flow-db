@@ -1077,11 +1077,15 @@ with holdings_tab:
     gain = with_basis['gain'].sum()
 
     value_col, gain_col, unknown_col = st.columns(3)
-    value_col.metric('Holdings value', money(holdings['value'].sum()), border=True, height='stretch')
+    value_col.metric('Holdings value', money(holdings['value'].sum()), border=True, height='stretch',
+                     help='What all the investments are worth today, including cash and 401K funds.')
     gain_col.metric('Unrealized gain', money(gain, sign=True), delta=f'{gain / with_basis["cost_basis"].sum():+.1%}',
-                    border=True, height='stretch')
+                    border=True, height='stretch',
+                    help="What you'd make selling everything today, before taxes: what it's worth minus what was "
+                         "paid. Only counts investments with a cost basis.")
     unknown_col.metric('No cost basis', money(holdings['value'].sum() - with_basis['value'].sum()), border=True,
-                       height='stretch')
+                       height='stretch', help="What cash and 401K funds are worth. The bank or brokerage doesn't "
+                                              "report what was paid for them, so they have no gain to show.")
 
 
     # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
