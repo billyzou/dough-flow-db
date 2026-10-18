@@ -18,9 +18,9 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="$HOME/.dough-flow-security"
 GITLEAKS_IMAGE="zricethezav/gitleaks:v8.24.3"
 # Ports the stack is allowed to publish on all interfaces. A new one appearing is flagged.
-EXPECTED_LAN_PORTS="5433 8080 8501"
+EXPECTED_LAN_PORTS="5433 8080 8501 8502"
 # Ports that must never be reachable from the internet.
-INTERNET_PORTS="5433 8080 8501"
+INTERNET_PORTS="5433 8080 8501 8502"
 
 mkdir -p "$STATE"
 chmod 700 "$STATE"

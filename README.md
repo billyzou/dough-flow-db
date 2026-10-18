@@ -133,6 +133,25 @@ Six tabs: **Net Worth**, **Holdings**, **This Month**, **This Year**, **Transact
 
 ---
 
+## Demo
+
+A second copy of the dashboard at **http://<host>:8502** shows a made-up household, for showing people without showing real finances. A "Demo data" badge sits next to the title.
+
+`demo/generate.py` writes fake bronze rows shaped like Plaid's payloads: a two-income couple in Seattle with a mortgage, at banks and brokerages the real setup doesn't use, with seasonal bills, trips, holiday shopping and card payments. Prices are real Yahoo Finance closes. The real dbt models then build silver and gold from it unchanged. The `demo-pipeline` service rebuilds it every morning so it runs through yesterday; the randomness is seeded, so past days stay the same.
+
+It's kept apart from the real data at every layer:
+- **Its own database**: `postgres-demo`, with its own volume and throwaway credentials written in docker-compose.yml. Its port isn't published.
+- **Its own network**: the demo services are only on the `demo` network, so they can't reach the real `postgres` at all, and no demo service gets `.env`.
+- **Two guards**: the generator stops unless the database is `dough_flow_demo` and has the `ops.demo_marker` table, which only `postgres-demo` creates (`demo/demo_marker.sql`). The demo dashboard (`DOUGH_FLOW_DEMO=1`) shows nothing on a database without the marker.
+
+```bash
+docker compose up -d postgres-demo demo-pipeline streamlit-demo   # start it
+docker compose restart demo-pipeline                              # rebuild the data now
+docker compose logs demo-pipeline                                 # see the last rebuild
+```
+
+---
+
 ## Investments
 
 The **Investments** tab breaks investment accounts down into holdings (ticker, value, cost basis, unrealized gain) and charts each holding's value against its cost basis over time.
@@ -184,7 +203,7 @@ Re-run `backfill_prices.py` after a stock split too: split-adjusted closes chang
 
 ```
 ├── dashboard/
-│   ├── app.py                # Streamlit dashboard (reads gold live)
+│   ├── app.py                # Streamlit dashboard (reads gold live; also the demo)
 │   └── assets/               # Logo, browser tab icon
 ├── dags/
 │   ├── ingest_plaid.py       # Airflow DAG: daily ingest
@@ -201,10 +220,14 @@ Re-run `backfill_prices.py` after a stock split too: split-adjusted closes chang
 │   ├── plaid_create_link_token.py
 │   ├── plaid_exchange_public_token.py
 │   └── plaid_link.html       # Browser UI for Plaid Link enrollment
+├── demo/
+│   ├── generate.py           # Made-up household → the demo database's bronze
+│   ├── refresh.sh            # Daily: generate.py, then dbt seed + run
+│   └── demo_marker.sql       # Marks the demo database (postgres-demo only)
 ├── sql/
 │   ├── schema.sql            # bronze and ops tables
 │   └── migrations/           # One-time moves between layouts
-├── docker-compose.yml        # Full stack: postgres, airflow, streamlit
+├── docker-compose.yml        # Full stack: postgres, airflow, streamlit, demo
 ├── Dockerfile                # Airflow image + requirements
 ├── Dockerfile.streamlit      # Streamlit image + psycopg2-binary
 └── .env.example              # Required env vars (Plaid keys, DB creds)
