@@ -91,6 +91,10 @@ st.markdown("""
     background: #31333f; color: #fff; font-size: 13px; line-height: 1.4; white-space: normal; text-align: left; }
 .tip.right { left: auto; right: 0; }
 .has-tip:hover > .tip { visibility: visible; opacity: 1; }
+/* tip_heading(): the ? sits mid-title, in regular weight like Streamlit's own help icon */
+h3 .has-tip.help { font-weight: 400; opacity: 0.6; margin: 0 6px; }
+h3 .has-tip.help:hover { opacity: 1; }
+h3 .tip { font-weight: 400; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -385,7 +389,16 @@ def in_period(df, start, period):
 
 
 RANGES = {'3M': 3, '6M': 6, '1Y': 12, '5Y': 60, 'ALL': None}
-EXCLUDED = 'Excludes cash and retirement accounts.'
+VALUE_HELP = 'What the holdings were worth each day.'
+COST_BASIS_HELP = 'What was paid for the investments, as the bank or brokerage reports it.'
+
+
+def tip_heading(col, parts):
+    # A subheader with a ? after any part, unlike st.subheader's one at the end: parts are
+    # (text, help or None)
+    html = ''.join(escape(text) + (f'<span class="has-tip help">?<span class="tip">{escape(help)}</span></span>'
+                                   if help else '') for text, help in parts)
+    col.markdown(f'### {html}', unsafe_allow_html=True)
 
 
 def holding_filters(history, latest, prefix):
@@ -423,7 +436,7 @@ def period_start(end_date, period):
     return end_date - pd.DateOffset(months=RANGES[period]) if RANGES[period] else None
 
 
-def performance_panel(container, rows, period, end_date, name):
+def performance_panel(container, rows, period, end_date, name, help=None):
     # Headline (gain, put in, time-weighted %) and value vs cost basis chart for rows over the period
     if rows.empty:
         container.info('No holdings match these filters.')
@@ -451,11 +464,7 @@ def performance_panel(container, rows, period, end_date, name):
         pct = f' ({twr:+.1%})' if twr is not None else ''
         container.markdown(escape_dollars(
             f"**{money(now['value'])}** on {money(put_in)} put in: "
-            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"), help=(
-            "Gain: value now minus the value at the period's start and money added during it, so against what was "
-            "paid. \"Put in\" is that starting value plus money added (for the whole history, the cost basis). "
-            "The %: how the assets performed, each day's market move without that day's deposits, chained, so "
-            "deposits and buying at a discount don't move it. Reinvested dividends count as deposits."))
+            f":{'green' if change >= 0 else 'red'}[{money(change, sign=True)}{pct}] · {dates}"), help=help)
     elif from_start:
         container.markdown(escape_dollars(f"**{money(now['value'])}**. No cost basis reported, so no gain to show."))
     else:
@@ -1051,56 +1060,66 @@ with holdings_tab:
     end_date = history['date'].max()
     first_snapshot = history.loc[history['source'] == 'snapshot', 'date'].min()
     all_rows, _ = select_holdings(history, latest, ([], [], []))
+    # read from the database so account names stay out of the code
+    unlinked = query("""
+        select distinct institution || ' · ' || account_name as account
+        from gold.daily_balances
+        where owner = 'wife' and account_group in ('Investments', 'Retirement')
+          and account_id not in (select account_id from gold.holdings)
+        order by 1
+    """)['account']
     st.caption(
-        "Wife's investments are not included yet: her accounts aren't linked to Plaid for holdings (see Notes).  \n"
-        f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, and shares "
-        "sold before then aren't counted.  \n"
-        f"As of {pd.to_datetime(holdings['snapshot_date'].max()):%b %d, %Y}. Accounts linked to Plaid with "
-        "investments access only; see the Notes tab for the ones still to link.")
+        (f"Not included yet: {', '.join(unlinked)}.  \n" if len(unlinked) else '')
+        + "Gains and charts cover only holdings with a cost basis, so not cash or 401K funds.  \n"
+        f"Before {first_snapshot:%b %d, %Y}, history is rebuilt from the purchase dates of the shares held then and "
+        "Yahoo Finance closing prices. Shares sold earlier aren't counted, so performance there is approximate.")
     with_basis = holdings[holdings['cost_basis'].notna()]
     gain = with_basis['gain'].sum()
 
     value_col, gain_col, unknown_col = st.columns(3)
-    value_col.metric('Holdings value', money(holdings['value'].sum()), border=True, height='stretch')
+    value_col.metric('Holdings value', money(holdings['value'].sum()), border=True, height='stretch',
+                     help='What all the investments are worth today, including cash and 401K funds.')
     gain_col.metric('Unrealized gain', money(gain, sign=True), delta=f'{gain / with_basis["cost_basis"].sum():+.1%}',
-                    border=True, height='stretch', help='Only holdings whose institution reports a cost basis')
+                    border=True, height='stretch',
+                    help="What you'd make selling everything today, before taxes: what it's worth minus what was "
+                         "paid. Only counts investments with a cost basis.")
     unknown_col.metric('No cost basis', money(holdings['value'].sum() - with_basis['value'].sum()), border=True,
-                       height='stretch', help="Value of holdings with no reported cost basis, so no gain: the 401K "
-                                              "funds and cash")
+                       height='stretch', help="What cash and 401K funds are worth. The bank or brokerage doesn't "
+                                              "report what was paid for them, so they have no gain to show.")
 
 
     # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
-    st.subheader('Performance', help=(
-        "Value: what the holdings were worth each day. Cost basis (dotted): what you've put in, as the institution "
-        "reports it. Left: all holdings with a cost basis. Right: the holdings picked in the filters. From "
-        f"{first_snapshot:%b %d, %Y} both lines come from Plaid's daily snapshots; before that they're rebuilt from "
-        "the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), so shares since "
-        "sold aren't counted and performance there is likely inaccurate. More in the Notes tab."))
+    tip_heading(st, [('Performance: Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
     filters, period = holding_filters(history, latest, 'performance')
-    selected, mixed = select_holdings(history, latest, filters)
+    selected, _ = select_holdings(history, latest, filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All holdings vs Cost Basis', help=EXCLUDED)
-    performance_panel(all_col, all_rows, period, end_date, 'performance_all')
-    selected_col.subheader('Selected holdings vs Cost Basis', help=EXCLUDED if mixed else None)
+    all_col.subheader('All Holdings')
+    performance_panel(all_col, all_rows, period, end_date, 'performance_all', help=(
+        "Put in: for ALL, the money invested (the cost basis). For a shorter period, what the holdings were "
+        "already worth at its start plus anything added since, so earlier growth isn't counted again and the "
+        "gain is only what was earned in the period.\n\n"
+        "Gain: what they're worth now minus what was put in.\n\n"
+        "The %: how the investments themselves did, the way a fund reports its return, so depositing money doesn't "
+        "change it. Reinvested dividends aren't counted as gains, so it's a little under the full return."))
+    selected_col.subheader('Selected Holdings')
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
     # previous close, like the morning snapshots
-    st.subheader('Rolling 1-Year Return', help=(
-        "Each day's return over the year before it, time-weighted so deposits don't count, against the S&P 500 "
-        "(SPY). Left: all holdings with a cost basis. Right: the holdings picked in the filters. Both are price "
-        f"returns, without dividends. Holdings history before {first_snapshot:%b %d, %Y} is rebuilt, so the "
-        "charts are approximate there."))
+    st.subheader('Performance: Rolling 1-Year Return vs S&P 500', help=(
+        "For each day, how much the investments grew over the year before it, against the S&P 500 (SPY). "
+        "It only counts market moves, so depositing money doesn't raise it. Dividends aren't "
+        "counted for either."))
     rolling_filters, rolling_period = holding_filters(history, latest, 'rolling')
     spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
     spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
     spy = spy.reindex(pd.date_range(spy.index.min(), end_date)).ffill().shift(1)
     spy_rolling = spy / spy.shift(365) - 1
-    rolling_selected, rolling_mixed = select_holdings(history, latest, rolling_filters)
+    rolling_selected, _ = select_holdings(history, latest, rolling_filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All holdings vs S&P 500', help=EXCLUDED)
+    all_col.subheader('All Holdings')
     rolling_panel(all_col, all_rows, rolling_period, end_date, spy_rolling, 'rolling_all')
-    selected_col.subheader('Selected holdings vs S&P 500', help=EXCLUDED if rolling_mixed else None)
+    selected_col.subheader('Selected Holdings')
     rolling_panel(selected_col, rolling_selected, rolling_period, end_date, spy_rolling, 'rolling_selected')
 
     st.subheader('Holdings')
@@ -1116,53 +1135,12 @@ with holdings_tab:
         help={
             'Type': "ETF: exchange-traded fund. Equity: a single company's stock. Mutual Fund: a pooled fund "
                     "priced once a day; every 401K holding is shown as one. Cash: uninvested cash.",
-            'Cost Basis': "What you paid in total for the shares you hold now, as reported by the institution. "
-                          "Blank when it doesn't report one.",
             'Gain': "Value minus cost basis: what you'd make if you sold today, before taxes.",
-            'Gain %': 'Gain as a percentage of cost basis.',
         },
         colored=('Gain', 'Gain %'),
     )
 
 # ---------- Notes ----------
 with notes_tab:
-    # read from the database so account names stay out of the code
-    unlinked = query("""
-        select distinct institution || ' · ' || account_name as account
-        from gold.daily_balances
-        where owner = 'wife' and account_group in ('Investments', 'Retirement')
-          and account_id not in (select account_id from gold.holdings)
-        order by 1
-    """)
-    if len(unlinked):
-        st.markdown("**To do: link the wife's investment accounts to Plaid for holdings** "
-                    "(scripts/plaid_create_link_token.py). Not on the Investments tab yet:")
-        st.markdown('\n'.join(f'- {a}' for a in unlinked['account']))
-
-    st.markdown('**How the Investments numbers work**')
-    st.markdown("""
-- **Cost basis** is what you've put into a holding, as the institution reports it. When it leaves that
-  blank but sends complete tax lots, their total is used. 401K funds usually have none.
-- **History:** from the first Plaid holdings snapshot, value and cost basis are what Plaid reported each
-  day. Before that they're rebuilt from the purchase dates (tax lots) of the shares held at the first
-  snapshot and each day's closing price from Yahoo Finance, priced at the previous close like Plaid's
-  morning snapshots. Shares sold before then aren't counted, so the rebuilt past reads low for accounts
-  that sell often (a robo-advisor rebalancing or harvesting losses). Holdings without complete purchase
-  records start at the first snapshot. **Treat performance before the first snapshot as approximate:** the
-  rebuild can't see past sales, so returns there (including the rolling 1-year return) are likely off.
-- **Put in:** for the whole history, the cost basis. For a shorter period, the value at its start plus
-  money added during it.
-- **Gain** is value now minus what was put in, so it's against what was paid and includes a purchase
-  discount (an ESPP buys below market).
-- **The %** is a time-weighted price return: each day's market move without that day's deposits, chained.
-  Deposits, their timing and purchase discounts don't move it. Reinvested dividends arrive as new shares,
-  so they count as deposits, and the % runs a little under a total return.
-- **Rolling 1-year return:** that % over the trailing year, as of each day, against the S&P 500's price
-  return (SPY).
-- **Layout:** each section shows all holdings on the left and the ones picked in its own filters on the
-  right; its period controls both. A mix with bonds, gold or international funds should trail it in years US large caps lead.
-- **All with a cost basis:** a selection that mixes holdings with and without a cost basis leaves out the
-  ones without, so value and cost basis cover the same holdings.
-""")
     with st.container(horizontal_alignment='center'):
         st.image(DANCING_ICON)
