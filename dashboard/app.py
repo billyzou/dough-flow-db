@@ -1070,8 +1070,7 @@ with holdings_tab:
         order by 1
     """)['account']
     st.caption(
-        (f"Not included yet, as they aren't linked to Plaid for holdings (scripts/plaid_create_link_token.py): "
-         f"{', '.join(unlinked)}.  \n" if len(unlinked) else '')
+        (f"Not included yet: {', '.join(unlinked)}.  \n" if len(unlinked) else '')
         + "Gains and charts cover only holdings with a cost basis, so not cash or 401K funds; a filter picking both "
         "kinds drops the ones without.  \n"
         f"Before {first_snapshot:%b %d, %Y}, history is rebuilt from the purchase dates of the shares held then and "
