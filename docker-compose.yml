@@ -74,6 +74,69 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ---------- Demo: the dashboard on a made-up household, to show people (demo/generate.py) ----------
+  # Kept apart from the real data: its own Postgres and volume, its own network (the real services
+  # aren't on it, so no demo container can reach the real `postgres`), and its own throwaway
+  # credentials written here. No demo service gets env_file, so none can read .env.
+  postgres-demo:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: dough_flow_demo
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./demo/demo_marker.sql:/docker-entrypoint-initdb.d/02_demo_marker.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "demo", "-d", "dough_flow_demo"]
+      interval: 5s
+      retries: 5
+    networks: [demo]
+    restart: unless-stopped
+
+  # Regenerates the fake bronze data and runs the real dbt models on it every morning (demo/refresh.sh)
+  demo-pipeline:
+    build: .
+    entrypoint: ["bash", "/demo/refresh.sh"]
+    environment: &demo-db
+      DB_HOST: postgres-demo
+      DB_PORT: 5432
+      DB_NAME: dough_flow_demo
+      DB_USER: demo
+      DB_PASSWORD: demo
+      DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+    volumes:
+      - ./demo:/demo:ro
+      - ./dough_flow_db:/demo-dbt:ro
+    networks: [demo]
+    depends_on:
+      postgres-demo:
+        condition: service_healthy
+    restart: unless-stopped
+
+  streamlit-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    environment:
+      <<: *demo-db
+      DOUGH_FLOW_DEMO: "1"
+    volumes:
+      - ./dashboard:/app:ro
+    command: streamlit run /app/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    ports:
+      - "8502:8501"
+    networks: [demo]
+    depends_on:
+      postgres-demo:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  demo:
+
 volumes:
   postgres_data:
   airflow_logs:
+  demo_postgres_data:

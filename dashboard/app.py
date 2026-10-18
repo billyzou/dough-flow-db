@@ -143,6 +143,15 @@ def query(sql):
         return pd.read_sql(sql, conn)
 
 
+# The demo instance (streamlit-demo in docker-compose) shows the made-up household from
+# demo/generate.py. It stops unless its database carries the demo marker, so a wrong setting
+# can't put real data on a screen meant for other people
+DEMO = os.environ.get('DOUGH_FLOW_DEMO') == '1'
+if DEMO and not query("select to_regclass('ops.demo_marker') is not null as marked")['marked'].iloc[0]:
+    st.error('Demo mode is on, but this is not the demo database. Nothing is shown.')
+    st.stop()
+
+
 def crosshair(df, x, series, y, y_format, order, monthly=False):
     # Hover anywhere on the plot: a hairline snaps to the nearest date and one tooltip
     # lists every series there, so the pointer never has to land on a line
@@ -686,6 +695,8 @@ def month_axis(df):
 with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.image(ICON, width=60)
     st.title('Dough Flow')
+    if DEMO:
+        st.badge('Demo data', icon=':material/visibility:', color='orange')
 
 categories = query('select * from gold.category_comparison')
 net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, how_to_use_tab = st.tabs(
