@@ -1091,8 +1091,9 @@ with holdings_tab:
     all_col, selected_col = st.columns(2)
     all_col.subheader('All Holdings')
     performance_panel(all_col, all_rows, period, end_date, 'performance_all', help=(
-        "Put in: the money invested. For a shorter period, what the holdings were worth at its start plus "
-        "anything added since.\n\n"
+        "Put in: for ALL, the money invested (the cost basis). For a shorter period, what the holdings were "
+        "already worth at its start plus anything added since, so earlier growth isn't counted again and the "
+        "gain is only what was earned in the period.\n\n"
         "Gain: what they're worth now minus what was put in.\n\n"
         "The %: how the investments themselves did, the way a fund reports its return, so adding money doesn't "
         "change it. Reinvested dividends aren't counted as gains, so it's a little under the full return."))
