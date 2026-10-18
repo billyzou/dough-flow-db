@@ -1,13 +1,10 @@
 category_id,name,type
 2,Food & Groceries,expense
 3,Shopping,expense
-4,Bills & Utilities,expense
+4,Housing & Bills,expense
 5,Transport,expense
 6,Travel,expense
 7,Entertainment,expense
-8,Housing,expense
 9,Personal Care,expense
-10,Loan Payments,expense
 11,Transfers,expense
 12,Income,income
-29,Health & Wellness,expense

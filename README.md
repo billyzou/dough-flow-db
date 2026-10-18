@@ -129,7 +129,7 @@ Medallion layers, one Postgres schema each. `sql/schema.sql` defines bronze and 
 
 ## Dashboard
 
-Six tabs: **Net Worth**, **Holdings**, **This Month**, **This Year**, **Transactions** and **Notes**. Holdings covers accounts linked to Plaid with the investments product; add it to an existing link with `scripts/plaid_create_link_token.py <LABEL>`. Category names, column headers and chart titles have hover tooltips explaining what they include. On line charts, click a line or its label to show only that line (Option-click hides it, double-click resets). On Monthly Spend by Category, an isolated category also shows its prior year dashed, and clicking off the lines shows every category for that month as bars.
+Six tabs: **Net Worth**, **Holdings**, **This Month**, **This Year**, **Transactions** and **How to Use**. Holdings covers accounts linked to Plaid with the investments product; add it to an existing link with `scripts/plaid_create_link_token.py <LABEL>`. Category names, column headers and chart titles have hover tooltips explaining what they include. On line charts, click a line or its label to show only that line (Option-click hides it, double-click resets). On Monthly Spend by Category, an isolated category also shows its prior year dashed, and clicking off the lines shows every category for that month as bars.
 
 ---
 

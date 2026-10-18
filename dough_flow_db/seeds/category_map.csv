@@ -19,16 +19,19 @@ Food & Drink,2
 Gas,5
 GENERAL_MERCHANDISE,3
 GENERAL_SERVICES,3
+GENERAL_SERVICES_AUTOMOTIVE,5
+GENERAL_SERVICES_INSURANCE,4
 Gifts & Donations,7
 GOVERNMENT_AND_NON_PROFIT,4
 Groceries,2
-Health & Wellness,29
-Home,8
-HOME_IMPROVEMENT,8
+Health & Wellness,9
+Home,3
+HOME_IMPROVEMENT,3
 INCOME,12
-LOAN_DISBURSEMENTS,10
-LOAN_PAYMENTS,10
-MEDICAL,29
+LOAN_DISBURSEMENTS,11
+LOAN_PAYMENTS,4
+LOAN_PAYMENTS_CREDIT_CARD_PAYMENT,11
+MEDICAL,9
 Merchandise & Supplies-Arts & Jewelry,3
 Merchandise & Supplies-Clothing Stores,3
 Merchandise & Supplies-Computer Supplies,3
@@ -48,7 +51,6 @@ Other-Government Services,4
 Other-Miscellaneous,3
 Personal,9
 PERSONAL_CARE,9
-PERSONAL_CARE_GYMS_AND_FITNESS_CENTERS,29
 Professional Services,4
 RENT_AND_UTILITIES,4
 Restaurant-Bar & Café,2
