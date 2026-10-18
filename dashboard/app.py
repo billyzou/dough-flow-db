@@ -1091,9 +1091,9 @@ with holdings_tab:
     filters, period = holding_filters(history, latest, 'performance')
     selected, _ = select_holdings(history, latest, filters)
     all_col, selected_col = st.columns(2)
-    tip_heading(all_col, [('All holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
+    tip_heading(all_col, [('All Holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
     performance_panel(all_col, all_rows, period, end_date, 'performance_all')
-    tip_heading(selected_col, [('Selected holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
+    tip_heading(selected_col, [('Selected Holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
@@ -1110,9 +1110,9 @@ with holdings_tab:
     spy_rolling = spy / spy.shift(365) - 1
     rolling_selected, rolling_mixed = select_holdings(history, latest, rolling_filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All holdings vs S&P 500', help=EXCLUDED)
+    all_col.subheader('All Holdings vs S&P 500', help=EXCLUDED)
     rolling_panel(all_col, all_rows, rolling_period, end_date, spy_rolling, 'rolling_all')
-    selected_col.subheader('Selected holdings vs S&P 500', help=EXCLUDED if rolling_mixed else None)
+    selected_col.subheader('Selected Holdings vs S&P 500', help=EXCLUDED if rolling_mixed else None)
     rolling_panel(selected_col, rolling_selected, rolling_period, end_date, spy_rolling, 'rolling_selected')
 
     st.subheader('Holdings')
