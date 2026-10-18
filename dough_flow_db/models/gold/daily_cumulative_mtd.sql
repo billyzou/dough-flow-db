@@ -1,3 +1,4 @@
+-- Discretionary: everything except Housing & Bills, the fairly fixed costs of living
 with spine as (
     select generate_series(
         date_trunc('month', current_date)::date,
@@ -10,7 +11,8 @@ with spine as (
 current_daily as (
     select
         transaction_date                          as date,
-        sum(spend)                          as daily_total
+        sum(spend)                          as daily_total,
+        sum(spend) filter (where category_name != 'Housing & Bills') as daily_discretionary
     from {{ ref('transactions') }}
     where
         spend is not null
@@ -22,7 +24,8 @@ current_daily as (
 prior_daily as (
     select
         (transaction_date + interval '1 year')::date as date,
-        sum(spend)                              as daily_total
+        sum(spend)                              as daily_total,
+        sum(spend) filter (where category_name != 'Housing & Bills') as daily_discretionary
     from {{ ref('transactions') }}
     where
         spend is not null
@@ -33,7 +36,9 @@ prior_daily as (
 
 -- avg monthly expense over last 12 fully completed calendar months
 avg_monthly as (
-    select sum(spend) / 12.0 as avg_monthly_spend
+    select
+        sum(spend) / 12.0 as avg_monthly_spend,
+        sum(spend) filter (where category_name != 'Housing & Bills') / 12.0 as avg_monthly_discretionary
     from {{ ref('transactions') }}
     where
         spend is not null
@@ -45,7 +50,9 @@ joined as (
     select
         spine.date,
         coalesce(c.daily_total, 0) as current_daily,
-        coalesce(p.daily_total, 0) as prior_daily
+        coalesce(p.daily_total, 0) as prior_daily,
+        coalesce(c.daily_discretionary, 0) as current_discretionary,
+        coalesce(p.daily_discretionary, 0) as prior_discretionary
     from spine
     left join current_daily c using (date)
     left join prior_daily  p using (date)
@@ -61,6 +68,15 @@ select
         order by date
         rows between unbounded preceding and current row
     )                                             as prior_year_month,
-    (select avg_monthly_spend from avg_monthly)   as avg_monthly_spend
+    (select avg_monthly_spend from avg_monthly)   as avg_monthly_spend,
+    sum(current_discretionary) over (
+        order by date
+        rows between unbounded preceding and current row
+    )                                             as this_month_discretionary,
+    sum(prior_discretionary) over (
+        order by date
+        rows between unbounded preceding and current row
+    )                                             as prior_year_month_discretionary,
+    (select avg_monthly_discretionary from avg_monthly) as avg_monthly_discretionary
 from joined
 order by date

@@ -66,6 +66,8 @@ st.markdown("""
 }
 /* the tab underline is a separate element that would scroll away; the box-shadow above replaces it */
 [data-testid="stTabs"] [data-baseweb="tab-border"] { display: none; }
+/* no link icon beside headings; the ? help icon next to it stays */
+[data-testid="stHeaderActionElements"] a[href^="#"] { display: none; }
 /* line charts with month_bars: clicking off the lines picks a month (see line_chart) */
 .month_targets_voronoi path { cursor: pointer; }
 /* html_table(): looks like st.dataframe, plus hover tooltips. Grays mix with the text color so
@@ -78,6 +80,7 @@ st.markdown("""
 .dough-table th { font-weight: 400; color: color-mix(in srgb, currentColor 65%, transparent);
     background: color-mix(in srgb, currentColor 3%, transparent); }
 .dough-table tbody tr:last-child td { border-bottom: none; }
+.dough-table.with-total tbody tr:last-child td { font-weight: 600; }
 /* number columns hug their contents so text columns (merchant, category) get the spare width */
 .dough-table .num { text-align: right; width: 1%; padding: 0 16px; }
 .dough-table .pos { color: #30a46c; }
@@ -98,28 +101,26 @@ h3 .tip { font-weight: 400; }
 </style>
 """, unsafe_allow_html=True)
 
-# Categorical palette in fixed order; categories past the 7th fold into "Other"
+# Categorical palette in fixed order
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
 OTHER = '#898781'
-MAX_CATEGORIES = len(PALETTE)
-LINE_CLICK_HELP = ('Click a line or its label to show only that line. Option-click to hide it (you can hide several). '
-                   'Double-click to bring them all back.')
+# every chart's plot height, so charts side by side (and across tabs) match
+CHART_HEIGHT = 300
+# a chart under a filter dropdown, so the pair is as tall as a plain chart: the dropdown's label,
+# input and the gap below it take about 84px
+FILTERED_CHART_HEIGHT = CHART_HEIGHT - 84
 # What each category includes; shown on hover wherever a category name appears
 CATEGORY_HELP = {
-    'Bills & Utilities': 'Recurring fixed bills: phone, internet, cable, insurance, utilities, bank fees, government services',
-    'Entertainment': 'Streaming services, concerts, events, gifts, donations',
+    'Entertainment': 'Streaming and subscriptions (Netflix, Prime, Apple), concerts, events, gifts, donations',
     'Food & Groceries': "All food spend: groceries (Whole Foods, Trader Joe's, Nijiya), restaurants, bars, cafes, food delivery",
-    'Health & Wellness': 'Doctors, dentists, eye care, pharmacy, gyms and fitness classes',
-    'Housing': 'Rent, home improvement, maintenance, repairs',
-    'Loan Payments': ('Mortgage payments, credit card payments, any debt service. A card payment lands here twice '
-                      '(out of checking, into the card) and cancels out; the purchases count in their own categories'),
-    'Personal Care': 'Haircuts, beauty, other personal care services',
-    'Shopping': 'General retail: clothing, electronics, household goods, department stores, online purchases',
+    'Housing & Bills': ('The fairly fixed costs of living: mortgage, property tax, utilities, phone, internet, '
+                        'insurance, loan payments, bank and card fees'),
+    'Personal Care': 'Doctors, dentists, eye care, pharmacy, gyms and fitness classes, haircuts, beauty',
+    'Shopping': 'General retail: clothing, electronics, household goods, furniture, home improvement, online purchases',
     'Transport': 'Rideshare (Uber, Lyft), public transit, gas, parking, car-related expenses',
     'Travel': 'Flights, hotels, travel agencies: trips away from home',
     'Transfers': 'Internal transfers between your own accounts; left out of spend and income totals so nothing is counted twice',
     'Income': 'All inflows: paychecks, reimbursements, interest, any money coming in',
-    'Other': 'Smaller categories grouped together',
 }
 # First day of the daily Plaid ingest (dags/ingest_plaid.py)
 PLAID_SYNC_START = pd.Timestamp('2026-05-04')
@@ -173,14 +174,15 @@ def spread_labels(values, gap, floor=None, top=None):
 
 
 def end_labels(ends, x_enc, y, series, color_scale, y_format, gap, top=None, floor=None, show_value=False,
-               tooltip=None, cursor=alt.Undefined, label_y=None, value_text=None):
+               tooltip=None, cursor=alt.Undefined, label_y=None, value_text=None, value=None):
     # Name each series just past the chart's right edge instead of using a legend, each with a dot
     # in its series color beside it. Labels that would overlap are spread apart around their lines,
     # and a thin connector joins each line's end to its label. label_y: a column of positions already
-    # worked out, used instead. value_text: formats the shown value (dollars by default).
+    # worked out, used instead. value_text: formats the shown value (dollars by default). value: the
+    # column shown, when it isn't y.
     ends = ends.sort_values(y).copy()
     ends['label_y'] = ends[label_y] if label_y else spread_labels(ends[y].tolist(), gap, floor, top)
-    ends['label_text'] = ends[series].astype(str) + (ends[y].map(lambda v: f' · {(value_text or money)(v)}') if show_value else '')
+    ends['label_text'] = ends[series].astype(str) + (ends[value or y].map(lambda v: f' · {(value_text or money)(v)}') if show_value else '')
     chart = alt.Chart(ends).encode(x=x_enc, color=alt.Color(f'{series}:N', scale=color_scale, legend=None))
     if tooltip:
         chart = chart.encode(tooltip=tooltip)
@@ -212,7 +214,7 @@ def hit_points(df, x, y, color, per_segment):
 
 
 def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False, monthly=False, prior=None,
-               month_bars=None, dotted=()):
+               month_bars=None, dotted=(), notes=None):
     # dotted: series drawn as a dotted line (e.g. a reference line in the same color as another series).
     # category_help: series are categories; hovering a line or its label shows what it includes.
     # prior: column of each point's value a year earlier, drawn dashed for an isolated line.
@@ -234,12 +236,13 @@ def line_chart(df, x, y, color, x_format, colors, zero=True, category_help=False
     df = df.merge(wide.reset_index(), on=x).assign(
         hover_x=lambda d: pd.to_datetime(d[x]).dt.strftime('%Y-%m-%d'),
         hover_label=lambda d: pd.to_datetime(d[x]).dt.strftime('%b %Y' if monthly else '%b %d, %Y'))
+    if notes is not None:
+        # on the date line, not a row of its own: the tooltip would show an empty Note on every other day
+        df['hover_label'] += df[x].map(notes).map(lambda n: f' · {n}' if isinstance(n, str) else '')
     if prior:
         df['prior_plot'] = df[prior].clip(lower=0)
-        df['prior_text'] = df[prior].map(lambda v: 'No data' if pd.isna(v) else money(v))
+    # just the date and every line's value; descriptions stay on the labels, last year on an isolated line
     hover_tooltip = ([alt.Tooltip('hover_label:N', title='Month' if monthly else 'Date')]
-                     + (label_tooltip if category_help else [])
-                     + ([alt.Tooltip('prior_text:N', title='Prior Year')] if prior else [])
                      + [alt.Tooltip(field=f'v_{s}', type='quantitative', format=y_format, title=str(s)) for s in colors])
     base = alt.Chart(df).encode(
         # monthly: one tick per data month (auto ticks drift off the points and can repeat a month)
@@ -478,7 +481,7 @@ def performance_panel(container, rows, period, end_date, name, help=None):
         line_chart(lines, 'date', 'amount', 'series', x_format,
                    {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
                    dotted=['Cost basis'])
-        .properties(height=300),
+        .properties(height=CHART_HEIGHT),
         use_container_width=True,
     )
 
@@ -495,7 +498,7 @@ def rolling_panel(container, rows, period, end_date, spy_rolling, name):
     x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if period == '3M' else '%b %Y'
     fresh(container, name, (period, len(rows), float(rows['value'].sum()))).altair_chart(
         rolling_chart(df.rename_axis('date').reset_index(), x_format, {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]})
-        .properties(height=300), use_container_width=True)
+        .properties(height=CHART_HEIGHT), use_container_width=True)
 
 
 def month_bar_layers(bars, start, end, y_format):
@@ -559,13 +562,14 @@ def money_table(df, columns, sort_by, help=None, total=True):
         totals.insert(0, df.columns[0], 'Total')
         df = pd.concat([df, totals], ignore_index=True)
     df = df.rename(columns=columns)
-    html_table(df, {c: '${:,.0f}' for c in df.columns[1:]}, help=help)
+    html_table(df, {c: '${:,.0f}' for c in df.columns[1:]}, help=help, total=total)
 
 
-def html_table(df, formats=None, help=None, colored=()):
+def html_table(df, formats=None, help=None, colored=(), total=False):
     # A static table like st.dataframe, which can't show tooltips: a ? on headers listed in
     # `help`, and each category name in a Category column shows what it includes. A format is a
     # format string or a function; missing values show blank. `colored` columns are green/red by sign.
+    # `total`: the last row is a total, shown bold.
     formats, help = formats or {}, help or {}
     numeric = {c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])}
 
@@ -588,7 +592,7 @@ def html_table(df, formats=None, help=None, colored=()):
             sign = 'pos' if c in colored and row[c] > 0 else 'neg' if c in colored and row[c] < 0 else ''
             cells += f'<td class="{"num" if c in numeric else ""} {sign}">{text}</td>'
         rows += f'<tr>{cells}</tr>'
-    st.html(f'<table class="dough-table"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>')
+    st.html(f'<table class="dough-table{" with-total" if total else ""}"><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>')
 
 
 def money(x, sign=False):
@@ -680,38 +684,49 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.title('Dough Flow')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, notes_tab = st.tabs(
-    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions', 'Notes'])
+net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, how_to_use_tab = st.tabs(
+    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions', 'How to Use'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
-    mtd = query('select date, this_month, prior_year_month, avg_monthly_spend from gold.daily_cumulative_mtd')
-    # Usual pace: the 12-mo avg month spread evenly over its days. The chart's line and the
-    # "vs usual pace" delta both use it, so they agree
+    mtd = query('select date, this_month, this_month_discretionary, '
+                'prior_year_month_discretionary, avg_monthly_discretionary from gold.daily_cumulative_mtd')
+    # Typical month pace: the 12-mo avg discretionary month spread evenly over its days. The chart's
+    # line and the "vs typical month pace" delta both use it, so they agree
     days_in_month = pd.Timestamp(mtd['date'].iloc[-1]).days_in_month
-    mtd['usual_pace'] = mtd['avg_monthly_spend'] * pd.to_datetime(mtd['date']).dt.day / days_in_month
+    mtd['usual_pace'] = mtd['avg_monthly_discretionary'] * pd.to_datetime(mtd['date']).dt.day / days_in_month
     today = mtd.iloc[-1]
     pace = today['usual_pace']
-    net_worth = query('select sum(net_worth_contribution) as total, min(snapshot_date) as oldest from gold.net_worth').iloc[0]
     syncs = query("""
         select distinct on (enrollment) enrollment, started_at, success, error_message
         from ops.pipeline_runs
         order by enrollment, started_at desc
     """)
 
-    spent, typical, worth, synced = st.columns(4)
-    spent.metric('Spent this month', money(today['this_month']),
-                 delta=f'{money(today["this_month"] - pace, sign=True)} vs usual pace', delta_color='inverse',
-                 help=f'Usual pace by today is {money(pace)}: the 12-mo avg spread evenly across the month', border=True, height='stretch')
-    typical.metric('Typical month', money(today['avg_monthly_spend']),
-                   help='Average spend over the last 12 full months', border=True, height='stretch')
-    worth.metric('Net worth', money(net_worth['total']), help='Latest balance of every active account, minus credit cards',
-                 border=True, height='stretch')
-    last_sync = pd.Timestamp(syncs['started_at'].max()).tz_convert('America/Los_Angeles')
-    synced.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', border=True, height='stretch')
-    # Below the row rather than under the tile, so the tiles stay the same height
-    if (pd.Timestamp(today['date']) - pd.Timestamp(net_worth['oldest'])).days > 30:
-        st.caption(f'Net worth includes balances last updated {net_worth["oldest"]:%b %d, %Y} (see Net Worth → Accounts)')
+    total, discretionary, typical, prior = st.columns(4)
+    # a metric takes one delta, so the box is a bordered container: the metric on the left and
+    # both comparisons as badges stacked on the right. Spending less is good: down is green
+    def spend_badge(diff, versus):
+        st.badge(f'{money(diff, sign=True)} vs {versus}', color='red' if diff > 0 else 'green',
+                 icon=':material/arrow_upward:' if diff > 0 else ':material/arrow_downward:')
+
+    with discretionary.container(border=True, height='stretch', horizontal=True, vertical_alignment='center'):
+        st.metric('Discretionary spend', money(today['this_month_discretionary']), width='content',
+                  help=f'Everything except Housing & Bills. Typical month pace by today is {money(pace)}: the '
+                       '12-mo avg discretionary month spread evenly across the month. Prior year is the same '
+                       'days of this month last year')
+        with st.container(gap=None, horizontal_alignment='right'):
+            spend_badge(today['this_month_discretionary'] - pace, 'typical month')
+            spend_badge(today['this_month_discretionary'] - today['prior_year_month_discretionary'], 'prior year')
+    total.metric('Total spend', money(today['this_month']), border=True, height='stretch',
+                 help='Every category, including Housing & Bills')
+    typical.metric('Typical month discretionary spend', money(today['avg_monthly_discretionary']),
+                   help='Average discretionary spend (everything except Housing & Bills) over the last 12 full months',
+                   border=True, height='stretch')
+    # the whole month, like the Prior Year column in the table below
+    prior_discretionary = categories.loc[categories['category_name'] != 'Housing & Bills', 'last_year_month'].sum()
+    prior.metric('Prior year discretionary spend', money(prior_discretionary), border=True, height='stretch',
+                 help='The whole of this month one year ago, everything except Housing & Bills')
 
     failed = syncs[~syncs['success']]
     for _, run in failed.iterrows():
@@ -720,14 +735,18 @@ with this_month_tab:
     left, right = st.columns(2)
 
     with left:
-        st.subheader('MTD Cumulative Spend', help='Usual Pace is the average month (last 12 fully completed months) '
-                     'spread evenly across its days, so it ends at the typical monthly total.\n\n' + LINE_CLICK_HELP)
-        mtd = mtd.drop(columns='avg_monthly_spend').rename(columns={
-            'this_month': 'This Month', 'prior_year_month': 'Prior Year', 'usual_pace': 'Usual Pace',
+        st.subheader('MTD Discretionary Spend', help='Everything except Housing & Bills (mortgage, utilities, '
+                     'insurance and other fairly fixed costs), so it shows the spending you control.\n\n'
+                     'Typical Month Pace is the average discretionary month (last 12 fully completed months) '
+                     'spread evenly across its days, so it ends at the typical monthly total.')
+        mtd_lines = mtd[['date', 'this_month_discretionary', 'prior_year_month_discretionary', 'usual_pace']].rename(columns={
+            'this_month_discretionary': 'This Month', 'prior_year_month_discretionary': 'Prior Year Pace',
+            'usual_pace': 'Typical Month Pace',
         }).melt('date', var_name='series', value_name='spend')
         st.altair_chart(
-            line_chart(mtd, 'date', 'spend', 'series', '%b %d',
-                       {'This Month': PALETTE[0], 'Prior Year': OTHER, 'Usual Pace': PALETTE[1]}),
+            line_chart(mtd_lines, 'date', 'spend', 'series', '%b %d',
+                       {'This Month': PALETTE[0], 'Prior Year Pace': OTHER, 'Typical Month Pace': PALETTE[0]},
+                       dotted=['Typical Month Pace', 'Prior Year Pace']).properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
 
@@ -739,8 +758,7 @@ with this_month_tab:
         }, 'this_month', help={'Prior Year': 'The whole of this month, one year ago',
                                '12-mo Avg': 'Average month over the last 12 fully completed months'})
 
-    st.subheader('Top Merchants')
-    st.caption('Last 28 days')
+    st.subheader('Top Merchants', help='Last 28 days')
     merchants = query('select merchant, total_spent, transaction_count, share_of_spend from gold.top_merchants order by total_spent desc')
     merchants.insert(0, 'rank', range(1, len(merchants) + 1))
     merchants = merchants.rename(columns={'rank': 'Rank', 'merchant': 'Merchant', 'total_spent': 'Total', 'transaction_count': 'Transactions', 'share_of_spend': '% of Spend'})
@@ -780,7 +798,7 @@ with transactions_tab:
     # While a range is half-picked the widget returns one date; treat it as a single day
     start, end = (tuple(dates) * 2)[:2]
     search = search_col.text_input('Search', placeholder='Merchant or description')
-    category_list = '\n'.join(f'- **{c}**: {h}' for c, h in CATEGORY_HELP.items() if c != 'Other')
+    category_list = '\n'.join(f'- **{c}**: {h}' for c, h in CATEGORY_HELP.items())
     chosen_categories = category_col.multiselect('Category', sorted(txns['category'].unique()), placeholder='All',
                                                  help=escape_dollars(category_list))
     chosen_accounts = account_col.multiselect('Account', sorted(txns['account'].unique()), placeholder='All')
@@ -806,7 +824,7 @@ with transactions_tab:
             'merchant': 'Merchant',
             'description': 'Description',
             'category': st.column_config.TextColumn(
-                'Category', help='\n'.join(f'{c}: {h}' for c, h in CATEGORY_HELP.items() if c != 'Other')),
+                'Category', help='\n'.join(f'{c}: {h}' for c, h in CATEGORY_HELP.items())),
             'account': 'Account',
             'owner': 'Owner',
             'amount': st.column_config.NumberColumn('Amount', format='dollar'),
@@ -816,10 +834,38 @@ with transactions_tab:
 
 # ---------- This Year: where is the money going over time? ----------
 with this_year_tab:
+    # last_year runs Jan 1 through the same date last year, so both sides cover the same days
+    discretionary_ytd = categories[categories['category_name'] != 'Housing & Bills']
+    income_ytd = query("""
+        select coalesce(sum(total), 0) as total from gold.monthly_cash_flow
+        where category_type = 'income' and month >= date_trunc('year', current_date)
+    """)['total'].iloc[0]
+    saved_ytd = income_ytd - categories['this_year'].sum()
+
+    def ytd_metric(col, label, this_year, last_year, help):
+        col.metric(label, money(this_year), delta=f'{money(this_year - last_year, sign=True)} vs last year',
+                   delta_color='inverse', help=help, border=True, height='stretch')
+
+    total_col, discretionary_col, saved_col = st.columns(3)
+    ytd_metric(total_col, 'Total spend', categories['this_year'].sum(), categories['last_year'].sum(),
+               'Every category this year, including Housing & Bills. Compared with Jan 1 through the same date last year')
+    ytd_metric(discretionary_col, 'Discretionary spend', discretionary_ytd['this_year'].sum(),
+               discretionary_ytd['last_year'].sum(),
+               'Everything except Housing & Bills this year. Compared with Jan 1 through the same date last year')
+    saved_col.metric('Saved this year', money(saved_ytd, sign=True),
+                     delta=f'{saved_ytd / income_ytd:.0%} of income' if income_ytd else None, delta_color='off',
+                     help='Income minus all spending this year. Transfers between your own accounts are left out',
+                     border=True, height='stretch')
+
+    # the cash flow row comes first on the page; its charts are filled in further down, once the
+    # months they cover are known (Cash Flow before Net Cash Flow, which reuses its monthly totals)
+    net_col, cash_col = st.columns(2)
     left, right = st.columns(2)
 
     with left:
-        st.subheader('YTD Cumulative Spend', help=LINE_CLICK_HELP)
+        st.subheader('YTD Cumulative Spend', help='All spending since Jan 1, added up day by day: every category '
+                     'including Housing & Bills, net of refunds. Transfers between your own accounts are left out. '
+                     "Last year's line covers the same dates a year earlier.")
         ytd = query("""
             select date, year, cumulative_total
             from gold.daily_cumulative_ytd
@@ -828,7 +874,9 @@ with this_year_tab:
         years = sorted(ytd['year'].unique(), reverse=True)
         st.altair_chart(
             line_chart(ytd, 'date', 'cumulative_total', 'year', '%b %d',
-                       dict(zip(years, [PALETTE[0], OTHER] + PALETTE[1:]))),
+                       # last year dotted in this year's blue
+                       dict(zip(years, [PALETTE[0], PALETTE[0]] + PALETTE[1:])), dotted=years[1:2])
+            .properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
 
@@ -838,95 +886,81 @@ with this_year_tab:
                     'this_year', help={'Prior Year': 'Last year, Jan 1 through the same date'}, total=False)
 
     trends = query('select month, category_name, total from gold.category_trends')
+    # categories in the dropdowns: biggest spend over the last 12 months first
     ranked = trends.groupby('category_name')['total'].sum().sort_values(ascending=False).index.tolist()
-    top = ranked[:MAX_CATEGORIES]
-    trends['category'] = trends['category_name'].where(trends['category_name'].isin(top), 'Other')
-    trends = trends.groupby(['month', 'category'], as_index=False)['total'].sum()
-
-    domain = top + (['Other'] if len(ranked) > MAX_CATEGORIES else [])
-    category_colors = dict(zip(domain, PALETTE[:len(top)] + [OTHER]))
-    # a month with no spend in a category is 0, not a gap in its line
-    trends = (trends.set_index(['month', 'category'])
-              .reindex(pd.MultiIndex.from_product([trends['month'].unique(), domain], names=['month', 'category']),
-                       fill_value=0)
-              .reset_index())
-    trends['month'] = pd.to_datetime(trends['month'])
-    months = sorted(trends['month'].unique())
+    months = sorted(pd.to_datetime(trends['month']).unique())
     a_year_before = [m - pd.DateOffset(years=1) for m in months]
 
     # every month's spend by category, for prior-year values (category_trends only covers the last 12 months)
     history = query('select month, category_name, total from gold.monthly_spending')
     history['month'] = pd.to_datetime(history['month'])
 
-    total_col, cash_col = st.columns(2)
-    with total_col:
-        st.subheader('Monthly Total Spend', help='Every category combined, transfers excluded. Prior Year is the '
-                     'same month a year earlier (the current month compares a partial month with a full one).')
-        spend_by_month = history.groupby('month')['total'].sum()
-        monthly_total = pd.concat([
-            pd.DataFrame({'month': months, 'series': 'Total Spend',
+    def year_over_year(spend_by_month, height=CHART_HEIGHT):
+        # this year's months and the same months a year earlier, as This Year and a dotted Prior Year
+        frame = pd.concat([
+            pd.DataFrame({'month': months, 'series': 'This Year',
                           'total': spend_by_month.reindex(months).fillna(0).values}),
             # history starts Jan 2025, so earlier months have no prior year and are left off
             pd.DataFrame({'month': months, 'series': 'Prior Year',
                           'total': spend_by_month.reindex(a_year_before).values}).dropna(),
         ])
-        st.altair_chart(line_chart(monthly_total, 'month', 'total', 'series', '%b %Y',
-                                   {'Total Spend': PALETTE[0], 'Prior Year': OTHER},
-                                   monthly=True).properties(height=400), use_container_width=True)
+        return line_chart(frame, 'month', 'total', 'series', '%b %Y', {'This Year': PALETTE[0], 'Prior Year': PALETTE[0]},
+                          dotted=['Prior Year'], monthly=True).properties(height=height)
+
+    housing_col, discretionary_col = st.columns(2)
+    with housing_col:
+        st.subheader('Monthly Housing & Bills', help=CATEGORY_HELP['Housing & Bills'] + '. Prior Year is the same '
+                     'month a year earlier (the current month compares a partial month with a full one).')
+        housing = history[history['category_name'] == 'Housing & Bills']
+        st.altair_chart(year_over_year(housing.groupby('month')['total'].sum()), use_container_width=True)
+
+    with discretionary_col:
+        st.subheader('Monthly Discretionary Spend', help='Every category except Housing & Bills, or just the ones '
+                     'picked below, added together. Transfers excluded. Prior Year is the same month a year earlier '
+                     '(the current month compares a partial month with a full one).')
+        discretionary_categories = [c for c in ranked if c != 'Housing & Bills']
+        picked = st.multiselect('Categories', discretionary_categories, placeholder='All') or discretionary_categories
+        chosen = history[history['category_name'].isin(picked)]
+        # a new pick changes the chart's data, so it has to mount fresh (see fresh)
+        fresh(st, 'discretionary_trend', tuple(picked)).altair_chart(
+            year_over_year(chosen.groupby('month')['total'].sum(), FILTERED_CHART_HEIGHT), use_container_width=True)
 
     with cash_col:
-        st.subheader('Net Cash Flow', help="Income (up) and spending (down) each month. Transfers between your own "
-                     "accounts are left out of both, so they aren't counted twice. Grey ticks are the same month a "
-                     "year earlier.")
+        st.subheader('Cash Flow', help="Income (up) and spending (down) each month. Transfers between your own "
+                     "accounts are left out of both, so they aren't counted twice.")
         cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
         cash['month'] = pd.to_datetime(cash['month'])
         by_type = cash.pivot_table(index='month', columns='type', values='total', aggfunc='sum')
         by_type = by_type.reindex(columns=['Income', 'Expense']).fillna(0)
         this_year = by_type.reindex(months).fillna(0)
-        last_year = by_type.reindex(a_year_before)  # NaN before history starts
-        flow = pd.DataFrame({'month': months})
-        for name, frame in (('', this_year), ('prior_', last_year)):
-            flow[f'{name}income'] = frame['Income'].values
-            flow[f'{name}expense'] = frame['Expense'].values
-            flow[f'{name}net'] = flow[f'{name}income'] + flow[f'{name}expense']
+        flow = pd.DataFrame({'month': months, 'income': this_year['Income'].values,
+                             'expense': this_year['Expense'].values})
+        flow['net'] = flow['income'] + flow['expense']
         # income up and expense down at the same month, so each month is one column
-        cash = pd.concat([flow.assign(type='Income', total=flow['income'], prior=flow['prior_income']),
-                          flow.assign(type='Expense', total=flow['expense'], prior=flow['prior_expense'])])
+        cash = pd.concat([flow.assign(type='Income', total=flow['income']),
+                          flow.assign(type='Expense', total=flow['expense'])])
         cash_x = month_axis(cash)
         cash_colors = alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2])
         cash_tooltip = [alt.Tooltip('label:N', title='Month')] + [
             alt.Tooltip(f'{field}:Q', title=title, format='$,.0f') for field, title in (
-                ('income', 'Income'), ('expense', 'Expense'), ('net', 'Net'),
-                ('prior_income', 'Income last year'), ('prior_expense', 'Expense last year'), ('prior_net', 'Net last year'))]
+                ('income', 'Income'), ('expense', 'Expense'), ('net', 'Net'))]
         bars = alt.Chart(cash).mark_bar(cornerRadius=3).encode(
             x=cash_x, y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
             color=alt.Color('type:N', title=None, scale=cash_colors, legend=alt.Legend(orient='right')),
             tooltip=cash_tooltip)
-        # a separate (stroke dash) legend so Prior Year shows as a line, not a dot like the bar colors
-        # a rule across most of the month's column (a tick is a fill, so its legend line would be blank)
-        ticks = alt.Chart(cash).mark_rule(strokeWidth=3, color=OTHER).encode(
-            x=alt.X('label:O', sort=cash_x.to_dict()['sort'], bandPosition=0.1), x2=alt.X2('label', bandPosition=0.9),
-            y='prior:Q', tooltip=cash_tooltip,
-            strokeDash=alt.StrokeDash('prior_label:N', scale=alt.Scale(range=[[1, 0]]), legend=alt.Legend(
-                title=None, orient='right', symbolType='stroke', symbolStrokeColor=OTHER, symbolStrokeWidth=3)),
-        ).transform_calculate(prior_label="'Prior Year'").transform_filter('isValid(datum.prior)')
-        st.altair_chart(alt.layer(bars, ticks).properties(height=400), use_container_width=True)
+        st.altair_chart(bars.properties(height=CHART_HEIGHT), use_container_width=True)
 
-    st.subheader('Monthly Spend by Category', help=(
-        f'Shows the {MAX_CATEGORIES} largest categories; the rest are grouped as Other (the tables list every '
-        'category).\n\nClick a line or its label to show only that category, with the same months last year '
-        'dashed. Click anywhere else to see every category for that month as bars. Option-click hides a line '
-        '(you can hide several); double-click brings them all back.'))
-    grouped = history.assign(category=history['category_name'].where(history['category_name'].isin(top), 'Other'))
-    grouped = grouped.groupby(['month', 'category'])['total'].sum()
-    trends['prior'] = [grouped.get((m - pd.DateOffset(years=1), c)) for m, c in zip(trends['month'], trends['category'])]
-    # every category (not grouped into Other) of each month, for the bars a month click shows
-    month_bars = history[history['month'].isin(months)].rename(columns={'category_name': 'name'})
-    last_year_spend = history.set_index(['month', 'category_name'])['total']
-    month_bars['prior'] = [last_year_spend.get((m - pd.DateOffset(years=1), c)) for m, c in zip(month_bars['month'], month_bars['name'])]
-    st.altair_chart(line_chart(trends, 'month', 'total', 'category', '%b %Y', category_colors, category_help=True,
-                               monthly=True, prior='prior', month_bars=month_bars).properties(height=400),
-                    use_container_width=True)
+    with net_col:
+        st.subheader('Net Cash Flow', help='Income minus spending each month: what was left over to save (green) '
+                     'or overspent (red). Transfers between your own accounts are left out.')
+        net = flow.copy()
+        net_x = month_axis(net)
+        net_tooltip = [alt.Tooltip('label:N', title='Month'), alt.Tooltip('net:Q', title='Net', format='$,.0f')]
+        # the same green and red as gains and losses in the tables
+        net_bars = alt.Chart(net).mark_bar(cornerRadius=3).encode(
+            x=net_x, y=alt.Y('net:Q', title=None, axis=alt.Axis(format='$,.0f')), tooltip=net_tooltip,
+            color=alt.condition('datum.net >= 0', alt.value('#30a46c'), alt.value('#e5484d')))
+        st.altair_chart(net_bars.properties(height=CHART_HEIGHT), use_container_width=True)
 
 # ---------- Net Worth: how are my assets growing? ----------
 with net_worth_tab:
@@ -964,10 +998,16 @@ with net_worth_tab:
     quarter_change, quarter_pct = growth(max(latest_date - pd.Timedelta(days=90), start))
     start_col.metric('Last 90 days', quarter_change, delta=quarter_pct, border=True, height='stretch')
 
+    # explain the jumps from accounts added after the start, on the day they first count
+    first_day = balances[balances['date'] == balances.groupby('account_id')['date'].transform('min')]
+    added = first_day[first_day['date'] > start].groupby('date')['value'].agg(['size', 'sum'])
+    added_notes = {d: f'{n} account{"s" if n > 1 else ""} added ({money(v, sign=True)})'
+                   for d, n, v in added.itertuples()}
+
     st.subheader('Net Worth')
     st.altair_chart(
         line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': PALETTE[0]},
-                   zero=False).properties(height=350),
+                   zero=False, notes=added_notes).properties(height=CHART_HEIGHT),
         use_container_width=True,
     )
 
@@ -979,16 +1019,15 @@ with net_worth_tab:
     left, right = st.columns(2)
 
     with left:
-        st.subheader('Assets by Type', help=LINE_CLICK_HELP)
-        st.caption('Credit card balances are subtracted from net worth but not shown here')
+        st.subheader('Assets by Type', help='Credit card balances are subtracted from net worth but not shown here')
         st.altair_chart(
-            line_chart(by_group, 'date', 'value', 'account_group', '%b %d', dict(zip(groups, PALETTE))),
+            line_chart(by_group, 'date', 'value', 'account_group', '%b %d', dict(zip(groups, PALETTE)))
+            .properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
 
     with right:
-        st.subheader('Asset Mix')
-        st.caption('Share of total assets by type')
+        st.subheader('Asset Mix', help='Share of total assets by type')
         mix = alt.Chart(by_group).mark_area(stroke='white', strokeWidth=1).encode(
             x=alt.X('date:T', title=None, axis=alt.Axis(format='%b %d')),
             y=alt.Y('value:Q', title=None, stack='normalize', axis=alt.Axis(format='.0%')),
@@ -997,8 +1036,9 @@ with net_worth_tab:
         )
         _, mix_rule = crosshair(by_group, 'date', 'account_group', 'share', '.0%', groups)
         mix_ends = stack_midpoints(by_group[by_group['date'] == latest_date], 'account_group', 'share', 'rank')
-        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.05, top=1, floor=0)
-        st.altair_chart(alt.layer(mix, mix_rule, *mix_labels), use_container_width=True)
+        mix_labels = end_labels(mix_ends, mix.encoding.x, 'mid', 'account_group', group_scale, '.0%', gap=0.05, top=1, floor=0,
+                                  show_value=True, value_text=lambda v: f'{v:.0%}', value='share')
+        st.altair_chart(alt.layer(mix, mix_rule, *mix_labels).properties(height=CHART_HEIGHT), use_container_width=True)
 
     st.subheader('Accounts')
     accounts = balances[balances['date'] == latest_date].merge(
@@ -1068,11 +1108,8 @@ with holdings_tab:
           and account_id not in (select account_id from gold.holdings)
         order by 1
     """)['account']
-    st.caption(
-        (f"Not included yet: {', '.join(unlinked)}.  \n" if len(unlinked) else '')
-        + "Gains and charts cover only holdings with a cost basis, so not cash or 401K funds.  \n"
-        f"Before {first_snapshot:%b %d, %Y}, history is rebuilt from the purchase dates of the shares held then and "
-        "Yahoo Finance closing prices. Shares sold earlier aren't counted, so performance there is approximate.")
+    if len(unlinked):
+        st.caption(f"Not included yet: {', '.join(unlinked)}.")
     with_basis = holdings[holdings['cost_basis'].notna()]
     gain = with_basis['gain'].sum()
 
@@ -1086,6 +1123,10 @@ with holdings_tab:
     unknown_col.metric('No cost basis', money(holdings['value'].sum() - with_basis['value'].sum()), border=True,
                        height='stretch', help="What cash and 401K funds are worth. The bank or brokerage doesn't "
                                               "report what was paid for them, so they have no gain to show.")
+    st.caption(
+        "Gains and charts cover only holdings with a cost basis, so they exclude cash and 401K.  \n"
+        f"Before {first_snapshot:%b %d, %Y}, history is rebuilt from the purchase dates of the shares held then and "
+        "Yahoo Finance closing prices. Shares sold earlier aren't counted, so performance there is approximate.")
 
 
     # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
@@ -1093,7 +1134,7 @@ with holdings_tab:
     filters, period = holding_filters(history, latest, 'performance')
     selected, _ = select_holdings(history, latest, filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All Holdings')
+    all_col.markdown('#### All Holdings')
     performance_panel(all_col, all_rows, period, end_date, 'performance_all', help=(
         "Put in: for ALL, the money invested (the cost basis). For a shorter period, what the holdings were "
         "already worth at its start plus anything added since, so earlier growth isn't counted again and the "
@@ -1101,7 +1142,7 @@ with holdings_tab:
         "Gain: what they're worth now minus what was put in.\n\n"
         "The %: how the investments themselves did, the way a fund reports its return, so depositing money doesn't "
         "change it. Reinvested dividends aren't counted as gains, so it's a little under the full return."))
-    selected_col.subheader('Selected Holdings')
+    selected_col.markdown('#### Selected Holdings')
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
@@ -1117,9 +1158,9 @@ with holdings_tab:
     spy_rolling = spy / spy.shift(365) - 1
     rolling_selected, _ = select_holdings(history, latest, rolling_filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All Holdings')
+    all_col.markdown('#### All Holdings')
     rolling_panel(all_col, all_rows, rolling_period, end_date, spy_rolling, 'rolling_all')
-    selected_col.subheader('Selected Holdings')
+    selected_col.markdown('#### Selected Holdings')
     rolling_panel(selected_col, rolling_selected, rolling_period, end_date, spy_rolling, 'rolling_selected')
 
     st.subheader('Holdings')
@@ -1140,7 +1181,28 @@ with holdings_tab:
         colored=('Gain', 'Gain %'),
     )
 
-# ---------- Notes ----------
-with notes_tab:
-    with st.container(horizontal_alignment='center'):
+# ---------- How to Use ----------
+with how_to_use_tab:
+    st.subheader("What's in each tab")
+    st.markdown(
+        '- **Net Worth**: total net worth over time, assets by type and mix, and every account\'s latest balance.\n'
+        '- **Investments**: holdings in your investment accounts, with gains and rolling 1-year return vs the S&P 500.\n'
+        '- **This Month**: discretionary and total spending so far vs your typical month pace, by category, and top merchants.\n'
+        '- **This Year**: year-to-date spend and savings, monthly Housing & Bills and discretionary spend (filterable by category) vs last year, and net cash flow.\n'
+        '- **Transactions**: every transaction, searchable and filterable by date, category and account.')
+
+    st.subheader('How to use the line charts')
+    st.markdown(
+        '- Click a line or its label to show only that line.\n'
+        '- Option-click to hide a line (you can hide several).\n'
+        '- Double-click to bring them all back.')
+
+    # keep last: the GIF always sits at the bottom of the tab, centered, with the last sync in the
+    # bottom right corner (equal side columns keep the GIF centered)
+    _, gif_col, sync_col = st.columns(3, vertical_alignment='bottom')
+    with gif_col.container(horizontal_alignment='center'):
         st.image(DANCING_ICON)
+    with sync_col.container(horizontal_alignment='right'):
+        # syncs comes from the This Month tab, which also warns about failed syncs
+        last_sync = pd.Timestamp(syncs['started_at'].max()).tz_convert('America/Los_Angeles')
+        st.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', border=True, width='content')
