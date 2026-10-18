@@ -91,6 +91,10 @@ st.markdown("""
     background: #31333f; color: #fff; font-size: 13px; line-height: 1.4; white-space: normal; text-align: left; }
 .tip.right { left: auto; right: 0; }
 .has-tip:hover > .tip { visibility: visible; opacity: 1; }
+/* tip_heading(): the ? sits mid-title, in regular weight like Streamlit's own help icon */
+h3 .has-tip.help { font-weight: 400; opacity: 0.6; margin: 0 6px; }
+h3 .has-tip.help:hover { opacity: 1; }
+h3 .tip { font-weight: 400; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -386,6 +390,16 @@ def in_period(df, start, period):
 
 RANGES = {'3M': 3, '6M': 6, '1Y': 12, '5Y': 60, 'ALL': None}
 EXCLUDED = 'Excludes cash and retirement accounts.'
+VALUE_HELP = 'What the holdings were worth each day.'
+COST_BASIS_HELP = "What you've put in, as the institution reports it (the dotted line)."
+
+
+def tip_heading(col, parts):
+    # A subheader with a ? after any part, unlike st.subheader's one at the end: parts are
+    # (text, help or None)
+    html = ''.join(escape(text) + (f'<span class="has-tip help">?<span class="tip">{escape(help)}</span></span>'
+                                   if help else '') for text, help in parts)
+    col.markdown(f'### {html}', unsafe_allow_html=True)
 
 
 def holding_filters(history, latest, prefix):
@@ -1069,17 +1083,17 @@ with holdings_tab:
 
     # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
     st.subheader('Performance', help=(
-        "Value: what the holdings were worth each day. Cost basis (dotted): what you've put in, as the institution "
-        "reports it. Left: all holdings with a cost basis. Right: the holdings picked in the filters. From "
+        "Left: all holdings with a cost basis, so excluding cash and retirement accounts. Right: the holdings "
+        "picked in the filters; cash and retirement accounts are left out when picked with others. From "
         f"{first_snapshot:%b %d, %Y} both lines come from Plaid's daily snapshots; before that they're rebuilt from "
         "the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), so shares since "
         "sold aren't counted and performance there is likely inaccurate. More in the Notes tab."))
     filters, period = holding_filters(history, latest, 'performance')
-    selected, mixed = select_holdings(history, latest, filters)
+    selected, _ = select_holdings(history, latest, filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All holdings vs Cost Basis', help=EXCLUDED)
+    tip_heading(all_col, [('All holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
     performance_panel(all_col, all_rows, period, end_date, 'performance_all')
-    selected_col.subheader('Selected holdings vs Cost Basis', help=EXCLUDED if mixed else None)
+    tip_heading(selected_col, [('Selected holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
