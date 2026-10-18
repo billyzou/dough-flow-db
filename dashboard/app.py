@@ -1082,18 +1082,20 @@ with holdings_tab:
 
 
     # Each section: its own filters and period; all holdings on the left, the filtered ones on the right
-    st.subheader('Performance', help=(
-        "Left: all holdings with a cost basis, so excluding cash and retirement accounts. Right: the holdings "
-        "picked in the filters; cash and retirement accounts are left out when picked with others. From "
-        f"{first_snapshot:%b %d, %Y} both lines come from Plaid's daily snapshots; before that they're rebuilt from "
-        "the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), so shares since "
-        "sold aren't counted and performance there is likely inaccurate. More in the Notes tab."))
+    tip_heading(st, [('Performance: Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
+    rebuilt = (
+        f"From {first_snapshot:%b %d, %Y} both lines come from Plaid's daily snapshots; before that they're rebuilt "
+        "from the purchase dates of the shares you hold now and each day's closing price (Yahoo Finance), so shares "
+        "since sold aren't counted and performance there is likely inaccurate. More in the Notes tab.")
     filters, period = holding_filters(history, latest, 'performance')
     selected, _ = select_holdings(history, latest, filters)
     all_col, selected_col = st.columns(2)
-    tip_heading(all_col, [('All Holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
+    all_col.subheader('All Holdings', help=(
+        'Every holding with a cost basis, so excluding cash and retirement accounts.\n\n' + rebuilt))
     performance_panel(all_col, all_rows, period, end_date, 'performance_all')
-    tip_heading(selected_col, [('Selected Holdings Value', VALUE_HELP), ('vs Cost Basis', COST_BASIS_HELP)])
+    selected_col.subheader('Selected Holdings', help=(
+        'The holdings picked in the filters; cash and retirement accounts are left out when picked with '
+        'others.\n\n' + rebuilt))
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
