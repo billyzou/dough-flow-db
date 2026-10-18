@@ -694,7 +694,8 @@ def month_axis(df):
 
 with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
     st.image(ICON, width=60)
-    st.title('Dough Flow')
+    # content width, so the demo badge sits beside the title rather than under the toolbar at the far right
+    st.title('Dough Flow', width='content')
     if DEMO:
         st.badge('Demo data', icon=':material/visibility:', color='orange')
 
