@@ -1101,7 +1101,7 @@ with holdings_tab:
 
     # Trailing 1-year price returns as of each day (see rolling_year), against the S&P 500 (SPY) at the
     # previous close, like the morning snapshots
-    st.subheader('Rolling 1-Year Return', help=(
+    st.subheader('Performance: Rolling 1-Year Return vs S&P 500', help=(
         "Each day's time-weighted % over the year before it, against the S&P 500's price return (SPY)."))
     rolling_filters, rolling_period = holding_filters(history, latest, 'rolling')
     spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
@@ -1110,9 +1110,9 @@ with holdings_tab:
     spy_rolling = spy / spy.shift(365) - 1
     rolling_selected, _ = select_holdings(history, latest, rolling_filters)
     all_col, selected_col = st.columns(2)
-    all_col.subheader('All Holdings vs S&P 500')
+    all_col.subheader('All Holdings')
     rolling_panel(all_col, all_rows, rolling_period, end_date, spy_rolling, 'rolling_all')
-    selected_col.subheader('Selected Holdings vs S&P 500')
+    selected_col.subheader('Selected Holdings')
     rolling_panel(selected_col, rolling_selected, rolling_period, end_date, spy_rolling, 'rolling_selected')
 
     st.subheader('Holdings')
