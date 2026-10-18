@@ -1092,10 +1092,11 @@ with holdings_tab:
     all_col, selected_col = st.columns(2)
     all_col.subheader('All Holdings')
     performance_panel(all_col, all_rows, period, end_date, 'performance_all', help=(
-        "Put in: the cost basis for the whole history; for a shorter period, the value at its start plus money "
-        "added. Gain: value now minus put in, so an ESPP's purchase discount counts. The %: a time-weighted price "
-        "return, each day's market move chained so deposits don't move it. Reinvested dividends count as "
-        "deposits, so it runs a little under a total return."))
+        "Put in: the money invested. For a shorter period, what the holdings were worth at its start plus "
+        "anything added since.\n\n"
+        "Gain: what they're worth now minus what was put in.\n\n"
+        "The %: how the investments themselves did, the way a fund reports its return, so adding money doesn't "
+        "change it. Reinvested dividends aren't counted as gains, so it's a little under the full return."))
     selected_col.subheader('Selected Holdings')
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
 
