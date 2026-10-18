@@ -1104,7 +1104,7 @@ with holdings_tab:
     # previous close, like the morning snapshots
     st.subheader('Performance: Rolling 1-Year Return vs S&P 500', help=(
         "For each day, how much the investments grew over the year before it, against the S&P 500 (SPY). "
-        "Like the % above, it only counts market moves, so depositing money doesn't raise it. Dividends aren't "
+        "It only counts market moves, so depositing money doesn't raise it. Dividends aren't "
         "counted for either."))
     rolling_filters, rolling_period = holding_filters(history, latest, 'rolling')
     spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
