@@ -390,8 +390,7 @@ def in_period(df, start, period):
 
 RANGES = {'3M': 3, '6M': 6, '1Y': 12, '5Y': 60, 'ALL': None}
 VALUE_HELP = 'What the holdings were worth each day.'
-COST_BASIS_HELP = ("What you've put in, as the institution reports it, or its tax lots' total when it leaves that "
-                   "blank. The dotted line.")
+COST_BASIS_HELP = 'What was paid for the investments, as the bank or brokerage reports it. The dotted line.'
 
 
 def tip_heading(col, parts):
