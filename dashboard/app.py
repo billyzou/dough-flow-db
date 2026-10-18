@@ -1071,8 +1071,7 @@ with holdings_tab:
     """)['account']
     st.caption(
         (f"Not included yet: {', '.join(unlinked)}.  \n" if len(unlinked) else '')
-        + "Gains and charts cover only holdings with a cost basis, so not cash or 401K funds; a filter picking both "
-        "kinds drops the ones without.  \n"
+        + "Gains and charts cover only holdings with a cost basis, so not cash or 401K funds.  \n"
         f"Before {first_snapshot:%b %d, %Y}, history is rebuilt from the purchase dates of the shares held then and "
         "Yahoo Finance closing prices. Shares sold earlier aren't counted, so performance there is approximate.")
     with_basis = holdings[holdings['cost_basis'].notna()]
