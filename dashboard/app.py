@@ -1095,7 +1095,7 @@ with holdings_tab:
         "already worth at its start plus anything added since, so earlier growth isn't counted again and the "
         "gain is only what was earned in the period.\n\n"
         "Gain: what they're worth now minus what was put in.\n\n"
-        "The %: how the investments themselves did, the way a fund reports its return, so adding money doesn't "
+        "The %: how the investments themselves did, the way a fund reports its return, so depositing money doesn't "
         "change it. Reinvested dividends aren't counted as gains, so it's a little under the full return."))
     selected_col.subheader('Selected Holdings')
     performance_panel(selected_col, selected, period, end_date, 'performance_selected')
@@ -1104,7 +1104,7 @@ with holdings_tab:
     # previous close, like the morning snapshots
     st.subheader('Performance: Rolling 1-Year Return vs S&P 500', help=(
         "For each day, how much the investments grew over the year before it, against the S&P 500 (SPY). "
-        "Like the % above, it only counts market moves, so adding money doesn't raise it. Dividends aren't "
+        "Like the % above, it only counts market moves, so depositing money doesn't raise it. Dividends aren't "
         "counted for either."))
     rolling_filters, rolling_period = holding_filters(history, latest, 'rolling')
     spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
