@@ -1054,9 +1054,7 @@ with holdings_tab:
     st.caption(
         "Wife's investments are not included yet: her accounts aren't linked to Plaid for holdings (see Notes).  \n"
         f"Performance before {first_snapshot:%b %d, %Y} is likely inaccurate: that history is rebuilt, and shares "
-        "sold before then aren't counted.  \n"
-        f"As of {pd.to_datetime(holdings['snapshot_date'].max()):%b %d, %Y}. Accounts linked to Plaid with "
-        "investments access only; see the Notes tab for the ones still to link.")
+        "sold before then aren't counted.")
     with_basis = holdings[holdings['cost_basis'].notna()]
     gain = with_basis['gain'].sum()
 
