@@ -104,6 +104,10 @@ h3 .tip { font-weight: 400; }
 # Categorical palette in fixed order
 PALETTE = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6']
 OTHER = '#898781'
+# the wordmark's green: lines that are one series, or this year against last year (dotted)
+BRAND = '#2F6B4F'
+# money in and money out: the same green and red as gains and losses in the tables
+GREEN, RED = '#30a46c', '#e5484d'
 # every chart's plot height, so charts side by side (and across tabs) match
 CHART_HEIGHT = 300
 # a chart under a filter dropdown, so the pair is as tall as a plain chart: the dropdown's label,
@@ -479,7 +483,7 @@ def performance_panel(container, rows, period, end_date, name, help=None):
     x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if period == '3M' else '%b %Y'
     fresh(container, name, (period, len(perf), float(perf['value'].sum()), float(perf['cost_basis'].sum()))).altair_chart(
         line_chart(lines, 'date', 'amount', 'series', x_format,
-                   {'Value': PALETTE[0], **({'Cost basis': PALETTE[0]} if has_basis else {})}, zero=False,
+                   {'Value': BRAND, **({'Cost basis': BRAND} if has_basis else {})}, zero=False,
                    dotted=['Cost basis'])
         .properties(height=CHART_HEIGHT),
         use_container_width=True,
@@ -497,7 +501,7 @@ def rolling_panel(container, rows, period, end_date, spy_rolling, name):
         return
     x_format = '%Y' if period in ('5Y', 'ALL') else '%b %d' if period == '3M' else '%b %Y'
     fresh(container, name, (period, len(rows), float(rows['value'].sum()))).altair_chart(
-        rolling_chart(df.rename_axis('date').reset_index(), x_format, {'Holdings': PALETTE[0], 'S&P 500': PALETTE[0]})
+        rolling_chart(df.rename_axis('date').reset_index(), x_format, {'Holdings': BRAND, 'S&P 500': BRAND})
         .properties(height=CHART_HEIGHT), use_container_width=True)
 
 
@@ -745,7 +749,7 @@ with this_month_tab:
         }).melt('date', var_name='series', value_name='spend')
         st.altair_chart(
             line_chart(mtd_lines, 'date', 'spend', 'series', '%b %d',
-                       {'This Month': PALETTE[0], 'Prior Year Pace': OTHER, 'Typical Month Pace': PALETTE[0]},
+                       {'This Month': BRAND, 'Prior Year Pace': OTHER, 'Typical Month Pace': BRAND},
                        dotted=['Typical Month Pace', 'Prior Year Pace']).properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
@@ -875,7 +879,7 @@ with this_year_tab:
         st.altair_chart(
             line_chart(ytd, 'date', 'cumulative_total', 'year', '%b %d',
                        # last year dotted in this year's blue
-                       dict(zip(years, [PALETTE[0], PALETTE[0]] + PALETTE[1:])), dotted=years[1:2])
+                       dict(zip(years, [BRAND, BRAND] + PALETTE[1:])), dotted=years[1:2])
             .properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
@@ -904,7 +908,7 @@ with this_year_tab:
             pd.DataFrame({'month': months, 'series': 'Prior Year',
                           'total': spend_by_month.reindex(a_year_before).values}).dropna(),
         ])
-        return line_chart(frame, 'month', 'total', 'series', '%b %Y', {'This Year': PALETTE[0], 'Prior Year': PALETTE[0]},
+        return line_chart(frame, 'month', 'total', 'series', '%b %Y', {'This Year': BRAND, 'Prior Year': BRAND},
                           dotted=['Prior Year'], monthly=True).properties(height=height)
 
     housing_col, discretionary_col = st.columns(2)
@@ -940,7 +944,7 @@ with this_year_tab:
         cash = pd.concat([flow.assign(type='Income', total=flow['income']),
                           flow.assign(type='Expense', total=flow['expense'])])
         cash_x = month_axis(cash)
-        cash_colors = alt.Scale(domain=['Income', 'Expense'], range=PALETTE[:2])
+        cash_colors = alt.Scale(domain=['Income', 'Expense'], range=[GREEN, RED])
         cash_tooltip = [alt.Tooltip('label:N', title='Month')] + [
             alt.Tooltip(f'{field}:Q', title=title, format='$,.0f') for field, title in (
                 ('income', 'Income'), ('expense', 'Expense'), ('net', 'Net'))]
@@ -956,10 +960,9 @@ with this_year_tab:
         net = flow.copy()
         net_x = month_axis(net)
         net_tooltip = [alt.Tooltip('label:N', title='Month'), alt.Tooltip('net:Q', title='Net', format='$,.0f')]
-        # the same green and red as gains and losses in the tables
         net_bars = alt.Chart(net).mark_bar(cornerRadius=3).encode(
             x=net_x, y=alt.Y('net:Q', title=None, axis=alt.Axis(format='$,.0f')), tooltip=net_tooltip,
-            color=alt.condition('datum.net >= 0', alt.value('#30a46c'), alt.value('#e5484d')))
+            color=alt.condition('datum.net >= 0', alt.value(GREEN), alt.value(RED)))
         st.altair_chart(net_bars.properties(height=CHART_HEIGHT), use_container_width=True)
 
 # ---------- Net Worth: how are my assets growing? ----------
@@ -1006,7 +1009,7 @@ with net_worth_tab:
 
     st.subheader('Net Worth')
     st.altair_chart(
-        line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': PALETTE[0]},
+        line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': BRAND},
                    zero=False, notes=added_notes).properties(height=CHART_HEIGHT),
         use_container_width=True,
     )
