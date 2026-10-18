@@ -50,8 +50,7 @@ select
     u.posted_date,
     u.amount,
     -- Single definition of spending: every expense except Transfers, money out positive,
-    -- refunds negative. Card payments land in Loan Payments twice (out of checking, into
-    -- the card) and cancel; tests/card_payments_are_paired.sql guards that.
+    -- refunds negative. Card payments are Transfers: the purchases count in their own categories.
     case when c.category_type = 'expense' and c.category_name != 'Transfers' then -u.amount end as spend,
     u.description,
     -- PayPal charges arrive without a merchant, described as "PAYPAL *<payee>"
