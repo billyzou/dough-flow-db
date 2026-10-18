@@ -1208,4 +1208,4 @@ with how_to_use_tab:
     with sync_col.container(horizontal_alignment='right'):
         # syncs comes from the This Month tab, which also warns about failed syncs
         last_sync = pd.Timestamp(syncs['started_at'].max()).tz_convert('America/Los_Angeles')
-        st.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', border=True, width='content')
+        st.metric('Last bank sync', f'{last_sync:%b %d, %-I:%M %p}', width='content')
