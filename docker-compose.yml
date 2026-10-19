@@ -64,6 +64,8 @@ services:
     env_file: .env
     environment:
       DB_HOST: postgres
+      # llama-server on the host Mac, for the Ask tab (the demo leaves it unset, so it has no Ask tab)
+      LLM_URL: http://host.docker.internal:8081
     volumes:
       - ./dashboard:/app
     command: streamlit run /app/app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true

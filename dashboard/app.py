@@ -5,13 +5,20 @@ Reads the dbt gold models live from Postgres. Runs as the `streamlit` service in
 docker-compose: http://<host>:8501
 """
 
+import ast
+import json
+import operator
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from html import escape
 from pathlib import Path
 
 import altair as alt
 import pandas as pd
 import psycopg2
+import requests
 import streamlit as st
 
 ICON = str(Path(__file__).parent / 'assets' / 'icon.png')
@@ -150,6 +157,44 @@ DEMO = os.environ.get('DOUGH_FLOW_DEMO') == '1'
 if DEMO and not query("select to_regclass('ops.demo_marker') is not null as marked")['marked'].iloc[0]:
     st.error('Demo mode is on, but this is not the demo database. Nothing is shown.')
     st.stop()
+
+# Local model for the Ask tab: llama-server on the host Mac (~/Library/LaunchAgents/com.billyzou.llama-server.plist).
+# Only the real dashboard sets it, so the demo has no Ask tab
+LLM_URL = os.environ.get('LLM_URL')
+# The model's two tools: SQL on gold to look things up, and a calculator so it never does math in its head
+ASK_TOOLS = [
+    {'type': 'function', 'function': {
+        'name': 'run_sql',
+        'description': 'Run one read-only PostgreSQL query on the gold schema. Returns CSV, at most 50 rows, '
+                       'so aggregate in SQL rather than fetching raw rows.',
+        'parameters': {'type': 'object', 'properties': {'query': {'type': 'string'}}, 'required': ['query']}}},
+    {'type': 'function', 'function': {
+        'name': 'calculate',
+        'description': 'Evaluate an arithmetic expression: numbers, + - * / % **, parentheses, '
+                       'round(), abs(), min(), max(). Use it for every calculation.',
+        'parameters': {'type': 'object', 'properties': {'expression': {'type': 'string'}},
+                       'required': ['expression']}}},
+]
+SQL_ROW_LIMIT = 50
+# tool rounds before the model has to answer, so a confused model can't loop forever
+ASK_MAX_STEPS = 15
+# what the column names don't say; the model gets the columns themselves from information_schema
+GOLD_NOTES = """\
+- transactions: one row per bank or card transaction. amount is signed: money out negative, money in positive. \
+spend is the money out as a positive number, for expenses only (null for income and Transfers).
+- category_type is 'income' or 'expense'. Transfers (an expense category) moves money between the household's \
+own accounts: leave it out of spending and income.
+- Categories are broad. To find something inside one (restaurants vs groceries in Food & Groceries, say), look \
+at the merchant and description columns first (group by merchant), then filter on the merchants that fit. \
+external_category and transaction_type are each bank's own labels and differ from bank to bank: don't filter \
+on them.
+- monthly_spending and category_trends: total is spend by month and category. monthly_cash_flow: total by month \
+for income (positive) and expense (negative), without Transfers.
+- category_comparison: this_month and this_year are to date; last_year_month is this month a year ago, whole.
+- top_merchants covers the last 28 days.
+- daily_balances: one row per account per day. net_worth: each active account's latest balance. \
+net_worth_contribution is the balance with debts (credit cards) negative.
+- holdings: investment positions on each snapshot_date; holdings_history goes further back."""
 
 
 def crosshair(df, x, series, y, y_format, order, monthly=False):
@@ -669,6 +714,115 @@ def escape_dollars(text):
     return text.replace('$', r'\$')
 
 
+def run_sql(sql):
+    """The Ask tab's run_sql tool. Runs as llm_reader (sql/migrations/007_llm_reader.sql), which can only
+    read gold, in a read-only session capped at 10s. Errors go back to the model so it can fix its query"""
+    try:
+        with closing(psycopg2.connect(
+            host=os.environ['DB_HOST'],
+            port=os.environ['DB_PORT'],
+            dbname=os.environ['DB_NAME'],
+            user='llm_reader',
+            password=os.environ['LLM_DB_PASSWORD'],
+            options='-c default_transaction_read_only=on -c statement_timeout=10s',
+        )) as conn, conn.cursor() as cur:
+            cur.execute(sql)
+            if cur.description is None:
+                return 'The statement returned no rows.'
+            rows = cur.fetchmany(SQL_ROW_LIMIT + 1)
+            result = pd.DataFrame(rows[:SQL_ROW_LIMIT], columns=[c.name for c in cur.description])
+    except psycopg2.Error as e:
+        return f'Error: {e}'
+    note = f'\n(First {SQL_ROW_LIMIT} rows only: aggregate in SQL instead.)' if len(rows) > SQL_ROW_LIMIT else ''
+    return (result.to_csv(index=False) if len(result) else 'No rows.') + note
+
+
+CALC_OPERATORS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+                  ast.Mod: operator.mod, ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos}
+CALC_FUNCTIONS = {'round': round, 'abs': abs, 'min': min, 'max': max}
+
+
+def calculate(expression):
+    """The Ask tab's calculate tool. Walks the parsed expression and allows only numbers, arithmetic and
+    CALC_FUNCTIONS: never eval, so the model can't run code"""
+    def value(node):
+        if isinstance(node, ast.Constant) and type(node.value) in (int, float):
+            return node.value
+        if isinstance(node, ast.BinOp) and type(node.op) in CALC_OPERATORS:
+            left, right = value(node.left), value(node.right)
+            if isinstance(node.op, ast.Pow) and abs(right) > 100:
+                raise ValueError('exponent too large')
+            return CALC_OPERATORS[type(node.op)](left, right)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in CALC_OPERATORS:
+            return CALC_OPERATORS[type(node.op)](value(node.operand))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in CALC_FUNCTIONS \
+                and not node.keywords:
+            return CALC_FUNCTIONS[node.func.id](*map(value, node.args))
+        raise ValueError(f'not allowed: {ast.unparse(node)}')
+
+    try:
+        return str(value(ast.parse(expression, mode='eval').body))
+    except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError) as e:
+        return f'Error: {e}'
+
+
+def log_ask_run(seconds, steps, success):
+    """Records how long a question took in ops.ask_runs (timing only), for the "usually ~Xs" estimate"""
+    with closing(psycopg2.connect(
+        host=os.environ['DB_HOST'],
+        port=os.environ['DB_PORT'],
+        dbname=os.environ['DB_NAME'],
+        user=os.environ['DB_USER'],
+        password=os.environ['DB_PASSWORD'],
+    )) as conn:
+        with conn, conn.cursor() as cur:
+            cur.execute('insert into ops.ask_runs (seconds, steps, success) values (%s, %s, %s)',
+                        (round(seconds, 1), steps, success))
+
+
+def ask_system_prompt():
+    """The Ask tab's instructions, with today's date and every gold table's columns"""
+    today = query('select current_date as today')['today'].iloc[0]
+    tables = query("select table_name, string_agg(column_name || ' ' || data_type, ', ' order by ordinal_position) "
+                   "as columns from information_schema.columns where table_schema = 'gold' "
+                   "group by table_name order by table_name")
+    days_in_month = pd.Timestamp(today).days_in_month
+    return ('You are a personal finance analyst for one household, answering from its PostgreSQL database. '
+            f"Today is {today:%A, %B %-d, %Y}; the database's current_date is the same. This month is only "
+            f'{today.day} of {days_in_month} days in, so before comparing this month with a whole month, scale '
+            'it up or say it is partial. Look things up with run_sql and do every calculation with calculate, '
+            'never in your head. If the data cannot answer the question, say so rather than guess. Answer '
+            'briefly, in USD, and quote the numbers you used.\n\n'
+            'Tables:\n' + '\n'.join(f'gold.{t.table_name}({t.columns})' for t in tables.itertuples())
+            + '\n\nNotes:\n' + GOLD_NOTES + '\n\nCategories (category_name):\n'
+            + '\n'.join(f'- {name}: {help}' for name, help in CATEGORY_HELP.items()))
+
+
+def ask_llm(messages, on_step):
+    """Runs the model with its tools until it answers, and returns the answer. Each tool call is
+    passed to on_step(tool, input, output) as it happens, so the page can show the work"""
+    messages = list(messages)
+    for _ in range(ASK_MAX_STEPS):
+        response = requests.post(f'{LLM_URL}/v1/chat/completions', json={'messages': messages, 'tools': ASK_TOOLS},
+                                 timeout=300)
+        response.raise_for_status()
+        message = response.json()['choices'][0]['message']
+        if not message.get('tool_calls'):
+            return message.get('content') or ''
+        messages.append(message)
+        for call in message['tool_calls']:
+            name = call['function']['name']
+            try:
+                args = json.loads(call['function']['arguments'])
+                tool_input = args['query'] if name == 'run_sql' else args['expression']
+                output = run_sql(tool_input) if name == 'run_sql' else calculate(tool_input)
+            except (ValueError, KeyError, TypeError) as e:
+                tool_input, output = call['function']['arguments'], f'Error: bad tool call ({e})'
+            on_step(name, tool_input, output)
+            messages.append({'role': 'tool', 'tool_call_id': call['id'], 'content': output})
+    return f'I could not finish within {ASK_MAX_STEPS} steps. Try a narrower question.'
+
+
 def table_height(df):
     # Tall enough to show every row (35px rows + header) so the table never scrolls
     return (len(df) + 1) * 35 + 3
@@ -700,8 +854,9 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
         st.badge('Demo data', icon=':material/visibility:', color='orange')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, how_to_use_tab = st.tabs(
-    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions', 'How to Use'])
+net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, *ask_tab, how_to_use_tab = st.tabs(
+    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions']
+    + (['Ask Dough Bot'] if LLM_URL else []) + ['How to Use'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -1195,6 +1350,75 @@ with holdings_tab:
         },
         colored=('Gain', 'Gain %'),
     )
+
+# ---------- Ask: questions about the numbers, answered by the local model ----------
+if ask_tab:
+    with ask_tab[0]:
+        st.subheader('Ask about your finances', help='Answered by Gemma 4 running on this Mac, so nothing leaves '
+                     'it. It looks things up with read-only SQL on the gold tables and does its math with a '
+                     'calculator; open "Show work" under an answer to see each step. It can still get things '
+                     'wrong: check the queries, or the numbers in the other tabs.')
+        if 'chat' not in st.session_state:
+            st.session_state.chat = []
+
+        def show_step(tool, tool_input, output):
+            st.code(tool_input, language='sql' if tool == 'run_sql' else None)
+            st.code(output, language=None)
+
+        chat = st.container(height=500)
+        for message in st.session_state.chat:
+            with chat.chat_message(message['role']):
+                if message.get('steps'):
+                    with st.status(f'Show work ({len(message["steps"])} steps)', state='complete'):
+                        for step in message['steps']:
+                            show_step(*step)
+                st.markdown(escape_dollars(message['content']))
+        if question := st.chat_input('e.g. How much did we spend at restaurants on weekends this year?'):
+            st.session_state.chat.append({'role': 'user', 'content': question})
+            chat.chat_message('user').markdown(escape_dollars(question))
+            steps = []
+            with chat.chat_message('assistant'):
+                # median of the last 20 answers; how long this one takes depends on how many queries it runs
+                usual = query('select percentile_cont(0.5) within group (order by seconds) as median from '
+                              '(select seconds from ops.ask_runs where success order by asked_at desc limit 20) r'
+                              )['median'].iloc[0]
+                # the dancing toast and a ticking timer while the model works, cleared once it answers or fails
+                thinking = st.empty()
+                with thinking.container(horizontal=True, vertical_alignment='center'):
+                    st.image(DANCING_ICON, width=40)
+                    timer = st.empty()
+                messages = [{'role': 'system', 'content': ask_system_prompt()}] + [
+                    {'role': m['role'], 'content': m['content']} for m in st.session_state.chat]
+                start = time.monotonic()
+                try:
+                    with st.status('Show work', state='running') as status:
+                        # the model runs in a worker thread so this loop can tick the timer; the thread only
+                        # appends to steps, and this loop draws them (Streamlit calls must stay on this thread)
+                        with ThreadPoolExecutor(max_workers=1) as pool:
+                            future = pool.submit(ask_llm, messages, lambda *step: steps.append(step))
+                            shown = 0
+                            while True:
+                                for step in steps[shown:len(steps)]:
+                                    show_step(*step)
+                                    shown += 1
+                                status.update(label=f'Show work ({shown} steps)')
+                                timer.caption(f'Thinking… {time.monotonic() - start:.0f}s'
+                                              + (f' (usually ~{usual:.0f}s)' if pd.notna(usual) else ''))
+                                if future.done():
+                                    break
+                                time.sleep(1)
+                            answer = future.result()
+                        status.update(label=f'Show work ({len(steps)} steps)', state='complete', expanded=False)
+                except requests.RequestException as e:
+                    thinking.empty()
+                    log_ask_run(time.monotonic() - start, len(steps), False)
+                    st.session_state.chat.pop()
+                    st.error(f'The local model failed ({LLM_URL}): {e}')
+                else:
+                    thinking.empty()
+                    log_ask_run(time.monotonic() - start, len(steps), True)
+                    st.markdown(escape_dollars(answer))
+                    st.session_state.chat.append({'role': 'assistant', 'content': answer, 'steps': steps})
 
 # ---------- How to Use ----------
 with how_to_use_tab:

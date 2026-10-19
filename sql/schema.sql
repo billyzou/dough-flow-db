@@ -153,3 +153,12 @@ CREATE TABLE IF NOT EXISTS ops.pipeline_runs (
     rows_inserted INT,
     rows_skipped  INT
 );
+
+-- One row per Ask Dough Bot question (dashboard), for its "usually ~Xs" estimate. Timing only.
+CREATE TABLE IF NOT EXISTS ops.ask_runs (
+    run_id   SERIAL PRIMARY KEY,
+    asked_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    seconds  NUMERIC(7, 1) NOT NULL,
+    steps    INT          NOT NULL,
+    success  BOOLEAN      NOT NULL
+);
