@@ -6,6 +6,7 @@ docker-compose: http://<host>:8501
 """
 
 import ast
+import base64
 import json
 import operator
 import os
@@ -23,6 +24,10 @@ import streamlit as st
 
 ICON = str(Path(__file__).parent / 'assets' / 'icon.png')
 DANCING_ICON = str(Path(__file__).parent / 'assets' / 'icon-dancing.gif')
+# The small dancing toast for Ask Dough Bot, as an <img> the browser scales: st.image shrinks a GIF
+# wider than its width with Pillow, which keeps only the first frame, so it wouldn't dance
+SMALL_DANCING_ICON = ('<img src="data:image/gif;base64,'
+                      + base64.b64encode(Path(DANCING_ICON).read_bytes()).decode() + '" width="40" height="40">')
 # Browser tab icon: just the toast, no tile, so it reads at 16px
 FAVICON = str(Path(__file__).parent / 'assets' / 'favicon.png')
 
@@ -1385,7 +1390,7 @@ if ask_tab:
                 # the dancing toast and a ticking timer while the model works, cleared once it answers or fails
                 thinking = st.empty()
                 with thinking.container(horizontal=True, vertical_alignment='center'):
-                    st.image(DANCING_ICON, width=40)
+                    st.markdown(SMALL_DANCING_ICON, unsafe_allow_html=True, width='content')
                     timer = st.empty()
                 messages = [{'role': 'system', 'content': ask_system_prompt()}] + [
                     {'role': m['role'], 'content': m['content']} for m in st.session_state.chat]
