@@ -1174,25 +1174,29 @@ with net_worth_tab:
     """)
     balances['date'] = pd.to_datetime(balances['date'])
     # Start once every account linked in the initial setup (first 30 days) has history, so that
-    # setup doesn't look like growth. Accounts added later appear as a step on their first day;
-    # they're left out of growth until they exist (below). Setup is counted from when the daily
-    # Plaid sync began, not the oldest balance: two Chase accounts have 2025 balances from the
-    # CSV backfill, which would otherwise start the chart before most accounts existed.
+    # setup doesn't look like growth. Accounts added later are backfilled (below). Setup is counted
+    # from when the daily Plaid sync began, not the oldest balance: two Chase accounts have 2025
+    # balances from the CSV backfill, which would otherwise start the chart before most accounts existed.
     first_seen = balances[balances['is_linked']].groupby('account_id')['date'].min()
     start = first_seen[first_seen <= PLAID_SYNC_START + pd.Timedelta(days=30)].max()
     balances = balances[balances['date'] >= start]
 
-    daily = balances.groupby('date', as_index=False)['value'].sum()
+    # An account added after the start counts at its first balance on every day before it, as if it
+    # had always been there, unchanged, so adding one isn't a jump in net worth or counted as growth.
+    # The charts and growth use this history; the Accounts table keeps the real balances
+    first = balances.loc[balances.groupby('account_id')['date'].idxmin()].rename(columns={'date': 'first_date'})
+    earlier = first.merge(pd.DataFrame({'date': balances['date'].unique()}), how='cross')
+    history = pd.concat([balances, earlier[earlier['date'] < earlier['first_date']].drop(columns='first_date')])
+
+    daily = history.groupby('date', as_index=False)['value'].sum()
     latest_date = daily['date'].max()
     month_ago_date = max(latest_date - pd.Timedelta(days=30), start)
     worth_now = daily.loc[daily['date'] == latest_date, 'value'].iloc[0]
 
     def growth(since):
-        # Only accounts that existed on `since`, so adding an account isn't counted as growth
-        then = balances[balances['date'] == since]
-        now = balances[(balances['date'] == latest_date) & balances['account_id'].isin(then['account_id'])]
-        change = now['value'].sum() - then['value'].sum()
-        return money(change, sign=True), f'{change / then["value"].sum():+.1%}'
+        then = daily.loc[daily['date'] == since, 'value'].iloc[0]
+        change = worth_now - then
+        return money(change, sign=True), f'{change / then:+.1%}'
 
     now_col, month_col, start_col = st.columns(3)
     now_col.metric('Net worth', money(worth_now), border=True, height='stretch')
@@ -1201,13 +1205,14 @@ with net_worth_tab:
     quarter_change, quarter_pct = growth(max(latest_date - pd.Timedelta(days=90), start))
     start_col.metric('Last 90 days', quarter_change, delta=quarter_pct, border=True, height='stretch')
 
-    # explain the jumps from accounts added after the start, on the day they first count
+    # mark accounts added after the start, on the day they were added
     first_day = balances[balances['date'] == balances.groupby('account_id')['date'].transform('min')]
     added = first_day[first_day['date'] > start].groupby('date')['value'].agg(['size', 'sum'])
     added_notes = {d: f'{n} account{"s" if n > 1 else ""} added ({money(v, sign=True)})'
                    for d, n, v in added.itertuples()}
 
-    st.subheader('Net Worth')
+    st.subheader('Net Worth', help='An account added after the start is counted at its first balance on the days '
+                 'before it was added, so adding one shows as no change rather than a jump')
     st.altair_chart(
         line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': BRAND},
                    zero=False, notes=added_notes).properties(height=CHART_HEIGHT),
@@ -1215,7 +1220,7 @@ with net_worth_tab:
     )
 
     groups = ['Cash', 'Investments', 'Retirement']
-    by_group = balances[balances['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
+    by_group = history[history['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
     by_group['rank'] = by_group['account_group'].map({g: i for i, g in enumerate(groups)})
     by_group['share'] = by_group['value'] / by_group.groupby('date')['value'].transform('sum')
     group_scale = alt.Scale(domain=groups, range=PALETTE[:len(groups)])
