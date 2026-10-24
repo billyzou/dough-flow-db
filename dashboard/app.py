@@ -436,16 +436,16 @@ def rolling_chart(df, x_format, colors):
 def fresh(container, name, key):
     # Streamlit's chart, updated in place (a new period, filter or data), keeps the datasets of its first
     # render and fails to load the new ones ("Unrecognized data set"), leaving it blank or without axes.
-    # It keys a chart by its position, so when key changes, an empty placeholder before the chart comes
-    # or goes and the chart mounts fresh. The chart gets a container of its own, so elements appearing
-    # or disappearing above it can't cancel the shift. Returns the container to draw the chart in
+    # It keys a chart by its position, so when key changes, the chart moves between two placeholders and
+    # mounts fresh. Both placeholders are written every run, so the old chart is cleared right away rather
+    # than left showing beside the new one until the run ends. The chart gets a container of its own, so
+    # elements appearing or disappearing above it can't cancel the shift. Returns the placeholder to draw in
     if st.session_state.get(f'{name}_data') != key:
         st.session_state[f'{name}_data'] = key
         st.session_state[f'{name}_version'] = st.session_state.get(f'{name}_version', 0) + 1
     slot = container.container()
-    if st.session_state[f'{name}_version'] % 2:
-        slot.empty()
-    return slot
+    first, second = slot.empty(), slot.empty()
+    return second if st.session_state[f'{name}_version'] % 2 else first
 
 
 def in_period(df, start, period):
@@ -1033,25 +1033,31 @@ with this_year_tab:
                      help='Income minus all spending this year. Transfers between your own accounts are left out',
                      border=True, height='stretch')
 
-    # the cash flow row comes first on the page; its charts are filled in further down, once the
-    # months they cover are known (Cash Flow before Net Cash Flow, which reuses its monthly totals)
-    net_col, cash_col = st.columns(2)
+    # the savings and cash flow row comes first on the page; Cash Flow is filled in further down,
+    # once the months it covers are known
+    savings_col, cash_col = st.columns(2)
     left, right = st.columns(2)
 
     with left:
         st.subheader('YTD Cumulative Spend', help='All spending since Jan 1, added up day by day: every category '
                      'including Housing & Bills, net of refunds. Transfers between your own accounts are left out. '
-                     "Last year's line covers the same dates a year earlier.")
+                     "Last year's line covers the same dates a year earlier. Income (dotted green) is this "
+                     'year\'s income, added up the same way, to compare spending against.')
         ytd = query("""
-            select date, year, cumulative_total
+            select date, year, category_type, cumulative_total
             from gold.daily_cumulative_ytd
-            where category_type = 'expense'
         """)
         years = sorted(ytd['year'].unique(), reverse=True)
+        # spend for each year, plus this year's income as its own series
+        ytd_lines = pd.concat([
+            ytd[ytd['category_type'] == 'expense'].assign(series=lambda d: d['year']),
+            ytd[(ytd['category_type'] == 'income') & (ytd['year'] == years[0])].assign(series='Income'),
+        ])[['date', 'series', 'cumulative_total']]
         st.altair_chart(
-            line_chart(ytd, 'date', 'cumulative_total', 'year', '%b %d',
-                       # last year dotted in this year's blue
-                       dict(zip(years, [BRAND, BRAND] + PALETTE[1:])), dotted=years[1:2])
+            line_chart(ytd_lines, 'date', 'cumulative_total', 'series', '%b %d',
+                       # spend in red, last year dotted; income dotted green
+                       dict(zip(years, [RED, RED] + PALETTE[1:])) | {'Income': GREEN},
+                       dotted=years[1:2] + ['Income'])
             .properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
@@ -1080,7 +1086,7 @@ with this_year_tab:
             pd.DataFrame({'month': months, 'series': 'Prior Year',
                           'total': spend_by_month.reindex(a_year_before).values}).dropna(),
         ])
-        return line_chart(frame, 'month', 'total', 'series', '%b %Y', {'This Year': BRAND, 'Prior Year': BRAND},
+        return line_chart(frame, 'month', 'total', 'series', '%b %Y', {'This Year': RED, 'Prior Year': RED},
                           dotted=['Prior Year'], monthly=True).properties(height=height)
 
     housing_col, discretionary_col = st.columns(2)
@@ -1102,8 +1108,12 @@ with this_year_tab:
             year_over_year(chosen.groupby('month')['total'].sum(), FILTERED_CHART_HEIGHT), use_container_width=True)
 
     with cash_col:
-        st.subheader('Cash Flow', help="Income (up) and spending (down) each month. Transfers between your own "
+        st.subheader('Cash Flow', help="Net: income minus spending each month, what was left over to save (green) "
+                     "or overspent (red). Split: income (up) and spending (down). Transfers between your own "
                      "accounts are left out of both, so they aren't counted twice.")
+        # label collapsed rather than hidden, so no blank space is kept above the toggle
+        view = st.segmented_control('View', ['Net', 'Split'], default='Net', label_visibility='collapsed',
+                                    key='cash_flow_view') or 'Net'
         cash = query("select month, initcap(category_type) as type, total from gold.monthly_cash_flow")
         cash['month'] = pd.to_datetime(cash['month'])
         by_type = cash.pivot_table(index='month', columns='type', values='total', aggfunc='sum')
@@ -1120,22 +1130,40 @@ with this_year_tab:
         cash_tooltip = [alt.Tooltip('label:N', title='Month')] + [
             alt.Tooltip(f'{field}:Q', title=title, format='$,.0f') for field, title in (
                 ('income', 'Income'), ('expense', 'Expense'), ('net', 'Net'))]
-        bars = alt.Chart(cash).mark_bar(cornerRadius=3).encode(
-            x=cash_x, y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
-            color=alt.Color('type:N', title=None, scale=cash_colors, legend=alt.Legend(orient='right')),
-            tooltip=cash_tooltip)
-        st.altair_chart(bars.properties(height=CHART_HEIGHT), use_container_width=True)
+        if view == 'Split':
+            bars = alt.Chart(cash).mark_bar(cornerRadius=3).encode(
+                x=cash_x, y=alt.Y('total:Q', title=None, axis=alt.Axis(format='$,.0f')),
+                color=alt.Color('type:N', title=None, scale=cash_colors, legend=None),
+                tooltip=cash_tooltip)
+        else:
+            bars = alt.Chart(flow).mark_bar(cornerRadius=3).encode(
+                x=month_axis(flow), y=alt.Y('net:Q', title=None, axis=alt.Axis(format='$,.0f')),
+                color=alt.condition('datum.net >= 0', alt.value(GREEN), alt.value(RED)), tooltip=cash_tooltip)
+        # switching views changes the chart's data, so it has to mount fresh (see fresh)
+        # the toggle without a label takes ~56px (FILTERED_CHART_HEIGHT allows for a labeled widget), so the
+        # chart's bottom lines up with YTD Cumulative Savings beside it
+        fresh(st, 'cash_flow', view).altair_chart(bars.properties(height=CHART_HEIGHT - 56),
+                                                  use_container_width=True)
 
-    with net_col:
-        st.subheader('Net Cash Flow', help='Income minus spending each month: what was left over to save (green) '
-                     'or overspent (red). Transfers between your own accounts are left out.')
-        net = flow.copy()
-        net_x = month_axis(net)
-        net_tooltip = [alt.Tooltip('label:N', title='Month'), alt.Tooltip('net:Q', title='Net', format='$,.0f')]
-        net_bars = alt.Chart(net).mark_bar(cornerRadius=3).encode(
-            x=net_x, y=alt.Y('net:Q', title=None, axis=alt.Axis(format='$,.0f')), tooltip=net_tooltip,
-            color=alt.condition('datum.net >= 0', alt.value(GREEN), alt.value(RED)))
-        st.altair_chart(net_bars.properties(height=CHART_HEIGHT), use_container_width=True)
+    with savings_col:
+        st.subheader('YTD Cumulative Savings', help='Income minus all spending since Jan 1, added up day by day. '
+                     "Transfers between your own accounts are left out. Last year's line covers the same dates "
+                     'a year earlier.')
+        ytd_flow = query("""
+            select date, year, category_type, cumulative_total
+            from gold.daily_cumulative_ytd
+        """)
+        savings = ytd_flow.pivot_table(index=['date', 'year'], columns='category_type',
+                                       values='cumulative_total').reset_index()
+        savings['saved'] = savings['income'] - savings['expense']
+        savings_years = sorted(savings['year'].unique(), reverse=True)
+        st.altair_chart(
+            line_chart(savings[['date', 'year', 'saved']], 'date', 'saved', 'year', '%b %d',
+                       # last year dotted in this year's color, like YTD Cumulative Spend
+                       dict(zip(savings_years, [BRAND, BRAND] + PALETTE[1:])), dotted=savings_years[1:2])
+            .properties(height=CHART_HEIGHT),
+            use_container_width=True,
+        )
 
 # ---------- Net Worth: how are my assets growing? ----------
 with net_worth_tab:
