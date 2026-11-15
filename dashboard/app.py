@@ -1211,15 +1211,60 @@ with net_worth_tab:
     added_notes = {d: f'{n} account{"s" if n > 1 else ""} added ({money(v, sign=True)})'
                    for d, n, v in added.itertuples()}
 
-    st.subheader('Net Worth', help='An account added after the start is counted at its first balance on the days '
-                 'before it was added, so adding one shows as no change rather than a jump')
-    st.altair_chart(
-        line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': BRAND},
-                   zero=False, notes=added_notes).properties(height=CHART_HEIGHT),
-        use_container_width=True,
-    )
+    worth_col, moved_col = st.columns(2)
+    with worth_col:
+        st.subheader('Net Worth', help='An account added after the start is counted at its first balance on the days '
+                     'before it was added, so adding one shows as no change rather than a jump')
+        st.altair_chart(
+            line_chart(daily.assign(series='Net worth'), 'date', 'value', 'series', '%b %d', {'Net worth': BRAND},
+                       zero=False, notes=added_notes).properties(height=CHART_HEIGHT),
+            use_container_width=True,
+        )
 
     groups = ['Cash', 'Investments', 'Retirement']
+
+    with moved_col:
+        st.subheader('What Moved Net Worth', help='Monthly net worth change. Market: investment gains and losses, not '
+                     'counting money you put in. Net savings: everything else, mostly income minus spending.')
+        # month-end values; the first month is the partial one the history starts in, so it has no change
+        invested = history[history['account_group'].isin(['Investments', 'Retirement'])].groupby('date')['value'].sum()
+        month_end = pd.DataFrame({'total': daily.set_index('date')['value'], 'invested': invested})
+        month_end = month_end.groupby(month_end.index.to_period('M')).last().diff().dropna()
+        deposits = query('select month, deposits from gold.monthly_investment_deposits')
+        deposits = deposits.set_index(pd.to_datetime(deposits['month']).dt.to_period('M'))['deposits'].astype(float)
+        moved = pd.DataFrame({'month': month_end.index.to_timestamp(), 'total': month_end['total'].values})
+        moved['market'] = (month_end['invested'] - deposits.reindex(month_end.index).fillna(0)).values
+        moved['saving'] = moved['total'] - moved['market']
+        # the month's net change as a label just past the end of its stack: above it when net worth went up,
+        # below it when it went down (positive parts stack up from $0, negative parts down)
+        moved['top'] = moved[['market', 'saving']].clip(lower=0).sum(axis=1)
+        moved['bottom'] = moved[['market', 'saving']].clip(upper=0).sum(axis=1)
+        moved['net'] = moved['total'].map(lambda v: money(v, sign=True))
+        moved_parts = ['Market', 'Net savings']
+        bars = pd.concat([moved.assign(part=p, amount=moved[c]) for p, c in zip(moved_parts, ['market', 'saving'])])
+        bars['rank'] = bars['part'].map({p: i for i, p in enumerate(moved_parts)})
+        moved_tooltip = [alt.Tooltip('label:N', title='Month')] + [
+            alt.Tooltip(f'{field}:Q', title=title, format='$,.0f') for field, title in (
+                ('market', 'Market'), ('saving', 'Net savings'), ('total', 'Net worth change'))]
+        # dotted line at $0, so gains and losses read at a glance (like the rolling return chart)
+        moved_zero = alt.Chart(pd.DataFrame({'amount': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(
+            y='amount:Q')
+        net_labels = alt.Chart(moved).encode(x=month_axis(moved), text='net:N')
+        net_up = net_labels.mark_text(dy=-8, fontSize=12, color=OTHER).encode(y='top:Q').transform_filter(
+            'datum.total >= 0')
+        net_down = net_labels.mark_text(dy=12, fontSize=12, color=OTHER).encode(y='bottom:Q').transform_filter(
+            'datum.total < 0')
+        st.altair_chart(
+            alt.layer(alt.Chart(bars).mark_bar(cornerRadius=3, stroke='white', strokeWidth=2).encode(
+                x=month_axis(bars), y=alt.Y('amount:Q', title=None, axis=alt.Axis(format='$,.0f')),
+                color=alt.Color('part:N', title=None, sort=moved_parts,
+                                scale=alt.Scale(domain=moved_parts, range=PALETTE[:2]),
+                                # inside the plot, so the chart is the same height as Net Worth beside it
+                                legend=alt.Legend(orient='top-right', direction='horizontal')),
+                order=alt.Order('rank:Q'), tooltip=moved_tooltip,
+            ), moved_zero, net_up, net_down).properties(height=CHART_HEIGHT),
+            use_container_width=True,
+        )
     by_group = history[history['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
     by_group['rank'] = by_group['account_group'].map({g: i for i, g in enumerate(groups)})
     by_group['share'] = by_group['value'] / by_group.groupby('date')['value'].transform('sum')

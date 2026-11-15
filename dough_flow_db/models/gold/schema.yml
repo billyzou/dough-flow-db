@@ -35,6 +35,13 @@ models:
         tests:
           - not_null
 
+  - name: monthly_investment_deposits
+    columns:
+      - name: month
+        tests:
+          - not_null
+          - unique
+
   - name: top_merchants
     columns:
       - name: merchant
