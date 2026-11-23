@@ -707,6 +707,14 @@ def daily_returns(daily):
     return ((daily['value'] - daily['market_flow']) / prev)[prev > 0]
 
 
+def market_moves(rows):
+    # Each holding row's gain or loss from price moves since the holding's previous row: the shares
+    # held then times the price change, so shares bought or sold aren't counted (like daily_returns)
+    rows = rows.sort_values(['holding', 'date'])
+    held = rows.groupby('holding')
+    return rows.assign(market=(held['quantity'].shift() * (rows['price'] - held['price'].shift())).fillna(0))
+
+
 def rolling_year(growth):
     # Trailing 1-year return as of each day, from daily growth factors
     index = growth.cumprod()
@@ -1265,7 +1273,84 @@ with net_worth_tab:
             ), moved_zero, net_up, net_down).properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
-    by_group = history[history['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
+
+    # What changed over a recent period and why: the market (against the S&P 500) or money moved
+    title_col, period_col = st.columns([4, 1.2], vertical_alignment='bottom')
+    title_col.subheader('What Changed', help=(
+        'How much net worth moved over the period and why. Market: gains and losses from price moves of the '
+        'shares held, in accounts whose holdings are synced. Money in/out: everything else, like deposits, '
+        "withdrawals, spending and card balances. Hand-entered accounts have no holdings, so their change isn't "
+        'split.'))
+    change_periods = {'1W': 7, '1M': 30, '3M': 90, 'YTD': None}
+    change_period = period_col.segmented_control('Period', list(change_periods), default='1W',
+                                                 label_visibility='collapsed', key='changed_period') or '1W'
+    days = change_periods[change_period]
+    since = max(latest_date - pd.Timedelta(days=days) if days else pd.Timestamp(latest_date.year - 1, 12, 31), start)
+    worth_then = daily.loc[daily['date'] == since, 'value'].iloc[0]
+
+    # Each account's change, split into money moved in or out (recorded deposits, withdrawals and
+    # transfers) and the market (the rest), like What Moved Net Worth. A flow on day d shows in the
+    # next morning's balance, so the period's flows are those from its first day up to its last.
+    # Cash and cards hold no shares, so all their change is money in/out; hand-entered investments
+    # have no recorded flows, so theirs isn't split
+    ends = history[history['date'].isin([since, latest_date])]
+    changed = ends.pivot_table(index='account', columns='date', values='value', aggfunc='sum', fill_value=0)
+    changed = pd.DataFrame({'Account': changed.index, 'Start': changed[since].values,
+                            'Change': (changed[latest_date] - changed[since]).values})
+    kinds = ends.drop_duplicates('account').set_index('account')
+    invested = changed['Account'].map(kinds['account_group']).isin(['Investments', 'Retirement'])
+    linked = changed['Account'].map(kinds['is_linked']).astype(bool)
+    flows = query('select date, account, amount from gold.investment_flows')
+    flows = flows[(pd.to_datetime(flows['date']) >= since) & (pd.to_datetime(flows['date']) < latest_date)]
+    moved_in = changed['Account'].map(flows.groupby('account')['amount'].sum()).fillna(0)
+    changed['Money in/out'] = changed['Change'].where(~invested, moved_in.where(linked))
+    changed['Market'] = changed['Change'] - changed['Money in/out']
+    market_part = invested & linked
+    invest_return = changed.loc[market_part, 'Market'].sum() / changed.loc[market_part, 'Start'].sum()
+    spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
+    spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
+    # the previous close, like the morning snapshots
+    spy = spy.reindex(pd.date_range(spy.index.min(), latest_date)).ffill().shift(1)
+    spy_return = spy.get(latest_date) / spy.get(since) - 1
+
+    worth_col, invest_col, spy_col = st.columns(3)
+    worth_col.metric('Net worth', money(worth_now - worth_then, sign=True),
+                     delta=f'{(worth_now - worth_then) / worth_then:+.1%}', border=True, height='stretch',
+                     help=f'{since:%b %d} – {latest_date:%b %d, %Y}')
+    invest_col.metric('Your investments', f'{invest_return:+.1%}', border=True, height='stretch',
+                      help='Market gain or loss of the synced investment and retirement accounts, as a share of '
+                           "what they were worth at the start. Money added or taken out doesn't count")
+    spy_col.metric('S&P 500', f'{spy_return:+.1%}' if pd.notna(spy_return) else 'No prices',
+                   border=True, height='stretch',
+                   help='SPY over the same days. Close to your investments: it was the market. Far apart: '
+                        'something you hold, or prices not loaded')
+
+    accounts_col, movers_col = st.columns(2)
+    with accounts_col:
+        table = changed.loc[changed['Change'].abs() >= 1, ['Account', 'Change', 'Market', 'Money in/out']]
+        table = table.reindex(table['Change'].abs().sort_values(ascending=False).index)
+        total = table.drop(columns='Account').sum(min_count=1).to_frame().T.assign(Account='Total')
+        html_table(pd.concat([table, total], ignore_index=True),
+                   {c: lambda v: money(v, sign=True) for c in ('Change', 'Market', 'Money in/out')},
+                   colored=('Change', 'Market', 'Money in/out'), total=True)
+    with movers_col:
+        # Which holdings drove it: each one's shares times its price change, from the last holdings snapshot
+        # on or before the start (there's none on days the sync was down). Holdings prices can lag the
+        # balances by a day, so these needn't add up to the Market column
+        held = query('select snapshot_date as date, ticker, account, quantity, price '
+                     'from gold.holdings_history where ticker <> \'Cash\'')
+        held['date'] = pd.to_datetime(held['date'])
+        held['holding'] = held['ticker'] + ' · ' + held['account']
+        held_since = held.loc[held['date'] <= since, 'date'].max()
+        held = market_moves(held[held['date'] >= (held_since if pd.notna(held_since) else since)])
+        by_ticker = held.sort_values('date').groupby('ticker')
+        movers = pd.DataFrame({'Price': by_ticker['price'].last() / by_ticker['price'].first() - 1,
+                               'Market': by_ticker['market'].sum()})
+        movers = movers.reindex(movers['Market'].abs().sort_values(ascending=False).index).head(8)
+        html_table(movers.rename_axis('Holding').reset_index(),
+                   {'Price': '{:+.1%}', 'Market': lambda v: money(v, sign=True)}, colored=('Price', 'Market'))
+
+    by_group =history[history['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
     by_group['rank'] = by_group['account_group'].map({g: i for i, g in enumerate(groups)})
     by_group['share'] = by_group['value'] / by_group.groupby('date')['value'].transform('sum')
     group_scale = alt.Scale(domain=groups, range=PALETTE[:len(groups)])

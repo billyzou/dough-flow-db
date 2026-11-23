@@ -7,9 +7,9 @@ from its first purchase to today, plus the SPY benchmark, into bronze.security_p
 lots to rebuild each holding's value before its first Plaid snapshot
 (silver.fct_holdings_reconstructed).
 
-Not part of the daily DAG: history before the first snapshot doesn't change. Re-run it after
-linking a new investment account, or after a split (Yahoo's closes are split-adjusted, so a
-split changes every earlier close). Then run dbt.
+Runs daily in the dbt_run DAG (load_prices), for the S&P 500 comparisons and filling outage gaps.
+Run it by hand after linking a new investment account, or after a split (Yahoo's closes are
+split-adjusted, so a split changes every earlier close), then run dbt.
 
 Usage (in the Airflow container, which has the DB settings):
     docker exec dough-flow-db-airflow-scheduler-1 python /opt/airflow/scripts/backfill_prices.py
