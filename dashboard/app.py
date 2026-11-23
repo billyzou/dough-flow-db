@@ -867,9 +867,9 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
         st.badge('Demo data', icon=':material/visibility:', color='orange')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, *ask_tab, fire_tab, how_to_use_tab = st.tabs(
-    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions']
-    + (['Ask Dough Bot'] if LLM_URL else []) + ['FIRE (WIP)', 'How to Use'])
+net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, fire_tab, *ask_tab, how_to_use_tab = st.tabs(
+    ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions', 'FIRE (WIP)']
+    + (['Ask Dough Bot'] if LLM_URL else []) + ['How to Use'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
