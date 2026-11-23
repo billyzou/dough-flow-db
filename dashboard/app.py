@@ -707,6 +707,14 @@ def daily_returns(daily):
     return ((daily['value'] - daily['market_flow']) / prev)[prev > 0]
 
 
+def market_moves(rows):
+    # Each holding row's gain or loss from price moves since the holding's previous row: the shares
+    # held then times the price change, so shares bought or sold aren't counted (like daily_returns)
+    rows = rows.sort_values(['holding', 'date'])
+    held = rows.groupby('holding')
+    return rows.assign(market=(held['quantity'].shift() * (rows['price'] - held['price'].shift())).fillna(0))
+
+
 def rolling_year(growth):
     # Trailing 1-year return as of each day, from daily growth factors
     index = growth.cumprod()
@@ -1265,6 +1273,132 @@ with net_worth_tab:
             ), moved_zero, net_up, net_down).properties(height=CHART_HEIGHT),
             use_container_width=True,
         )
+
+    # What made up the change in the tiles' periods: each holding's market gain or loss, then net savings,
+    # adding up to the net worth change. Builds on What Moved Net Worth, which splits it the same way by month
+    title_col, period_col = st.columns([4, 1.2], vertical_alignment='bottom')
+    title_col.subheader('What Made Up the Change', help=(
+        "The net worth change in the period, built up from what moved it: each holding's gain or loss from "
+        "price moves, largest first, then accounts with no synced holdings, then net savings: everything else, "
+        "as in What Moved Net Worth, mostly income minus spending. Green adds to net worth, red takes away."))
+    window = period_col.segmented_control('Period', ['30 days', '90 days'], default='30 days',
+                                          label_visibility='collapsed', key='made_up_period') or '30 days'
+    # the same start as the tiles above, so the total matches theirs
+    since = max(latest_date - pd.Timedelta(days=int(window.split()[0])), start)
+
+    # Each account's market part: an investment account's change less the money moved in or out that its
+    # brokerage recorded (a flow on day d shows in the next morning's balance). Hand-entered accounts record
+    # no flows, so all their change counts as market, as in What Moved Net Worth. Cash and cards have none
+    ends = history[history['date'].isin([since, latest_date])]
+    by_account = ends.pivot_table(index='account', columns='date', values='value', aggfunc='sum', fill_value=0)
+    change = by_account[latest_date] - by_account[since]
+    kinds = ends.drop_duplicates('account').set_index('account').reindex(change.index)
+    invested = kinds['account_group'].isin(['Investments', 'Retirement'])
+    linked = kinds['is_linked'].astype(bool)
+    flows = query('select date, account, amount from gold.investment_flows')
+    flow_dates = pd.to_datetime(flows['date'])
+    flows = flows[(flow_dates >= since) & (flow_dates < latest_date)]
+    moved_in = flows.groupby('account')['amount'].sum().reindex(change.index, fill_value=0)
+    market = (change - moved_in.where(linked, 0)).where(invested, 0)
+
+    # Was it the market? The synced investment accounts' market part against the S&P 500 over the same days,
+    # within 2 points counting as in line with it
+    spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
+    spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
+    spy = spy.reindex(pd.date_range(spy.index.min(), latest_date)).ffill().shift(1)  # the previous close
+    synced = invested & linked
+    invest_return = market[synced].sum() / by_account.loc[synced, since].sum()
+    spy_return = spy.get(latest_date) / spy.get(since) - 1
+    if pd.notna(spy_return):
+        gap = invest_return - spy_return
+        verdict = ('in line with the market, so the market moved, not something specific to what you hold'
+                   if abs(gap) <= 0.02 else 'you did better than the market' if gap > 0
+                   else 'you did worse than the market; the biggest bars below show where')
+
+        def moved(r):
+            return f"{'rose' if r >= 0 else 'fell'} {abs(r):.1%}"
+
+        st.caption(f'From price moves alone, your investments {moved(invest_return)} while the S&P 500 '
+                   f'{moved(spy_return)}: {verdict}.')
+
+    # Each holding's part: its shares times its price change, from the last holdings snapshot on or before
+    # the start (there's none on days the sync was down)
+    held = query("select snapshot_date as date, ticker, account, quantity, price "
+                 "from gold.holdings_history where ticker <> 'Cash'")
+    held['date'] = pd.to_datetime(held['date'])
+    held['holding'] = held['ticker'] + ' · ' + held['account']
+    held_since = held.loc[held['date'] <= since, 'date'].max()
+    held = market_moves(held[held['date'] >= (held_since if pd.notna(held_since) else since)])
+    names = query('select ticker, security_type, security_name from gold.holdings').drop_duplicates('ticker')
+    names = names.set_index('ticker')
+    by_ticker = held.sort_values('date').groupby('ticker')
+    holdings = pd.DataFrame({
+        'amount': by_ticker['market'].sum(),
+        'price': by_ticker['price'].last() / by_ticker['price'].first() - 1,
+        'account': by_ticker['account'].agg(lambda a: ', '.join(sorted(set(a)))),
+    }).join(names)
+    holdings = holdings.reindex(holdings['amount'].abs().sort_values(ascending=False).index)
+    with_holdings = market.index.isin(held['account'])
+
+    # The rows: every holding, accounts without holdings, and the gap between the holdings and their accounts'
+    # balances, which add up to the market part; then net savings, adding up to the net worth change. The gap:
+    # holdings prices can lag the balance by a day, a start inside a sync outage has no holdings snapshot that
+    # day, and reinvested dividends arrive as shares, not gains.
+    # A holding reads "(VOO) Vanguard S&P 500 ETF". Names come as "issuer - fund": a fund keeps the fund
+    # part, a stock the company ("Visa Inc - Ordinary Shares - Class A" is Visa Inc). A 401K fund's code
+    # (VANG.TARG.2060.PLUS) isn't a ticker, so it shows just its name
+    def holding_label(ticker, kind, name):
+        parts = name.split(' - ')
+        short = parts[1] if len(parts) > 1 and kind != 'equity' else parts[0]
+        return f'({ticker}) {short}' if len(ticker) <= 5 else short
+
+    steps = [dict(label=holding_label(t, r['security_type'], r['security_name']), amount=r['amount'],
+                  name=r['security_name'],
+                  account=r['account'], price=r['price']) for t, r in holdings.iterrows()]
+    steps += [dict(label='Accounts without holdings', amount=market[~with_holdings].sum(),
+                   name='Investment accounts with no synced holdings, like hand-entered ones'),
+              dict(label='Timing & dividends', amount=market[with_holdings].sum() - holdings['amount'].sum(),
+                   name='Where holdings and account balances disagree: holdings prices a day behind, a start date '
+                        'during a sync outage, and reinvested dividends'),
+              dict(label='Net savings', amount=change.sum() - market.sum(),
+                   name='Everything but the market: mostly income minus spending')]
+    steps = pd.DataFrame([s for s in steps if abs(s['amount']) >= 1])
+    # gains first, then losses, each keeping the order above: holdings largest first, then the rest
+    steps = steps.sort_values('amount', key=lambda a: a < 0, kind='stable')
+    # each bar runs from the running total to the running total plus its amount; the total row from $0
+    steps['end'] = steps['amount'].cumsum()
+    steps['start'] = steps['end'] - steps['amount']
+    steps = pd.concat([steps, pd.DataFrame([dict(label='Net worth change', amount=change.sum(), start=0,
+                                                 end=change.sum())])], ignore_index=True)
+    steps['left'] = steps[['start', 'end']].min(axis=1)
+    steps['right'] = steps[['start', 'end']].max(axis=1)
+    steps['text'] = steps['amount'].map(lambda v: money(v, sign=True))
+    steps['sign'] = steps['amount'].map(lambda v: 'Gain' if v >= 0 else 'Loss')
+
+    # one row per bar, so every label fits, read top to bottom
+    y = alt.Y('label:N', sort=list(steps['label']), title=None, axis=alt.Axis(labelLimit=320))
+    # room on both sides for the amounts beside the bars at the ends
+    low, high = min(steps['left'].min(), 0), max(steps['right'].max(), 0)
+    pad = (high - low) * 0.12
+    step_bars = alt.Chart(steps).mark_bar(cornerRadius=3).encode(
+        y=y, x=alt.X('start:Q', title=None, axis=alt.Axis(format='$,.0f'),
+                     scale=alt.Scale(domain=[low - pad, high + pad], nice=False)), x2='end:Q',
+        color=alt.Color('sign:N', legend=None, scale=alt.Scale(domain=['Gain', 'Loss'], range=['#30a46c', '#e5484d'])),
+        tooltip=[alt.Tooltip('label:N', title=' '), alt.Tooltip('name:N', title='What'),
+                 alt.Tooltip('account:N', title='Account'), alt.Tooltip('price:Q', title='Price change', format='+.1%'),
+                 alt.Tooltip('amount:Q', title='Change', format='$,.0f')],
+    )
+    step_zero = alt.Chart(pd.DataFrame({'amount': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(x='amount:Q')
+    # each amount just past its bar's end: right of a gain, left of a loss
+    step_labels = alt.Chart(steps).encode(y=y, text='text:N')
+    step_up = step_labels.mark_text(align='left', dx=4, fontSize=12, color=OTHER).encode(x='right:Q').transform_filter(
+        'datum.amount >= 0')
+    step_down = step_labels.mark_text(align='right', dx=-4, fontSize=12, color=OTHER).encode(x='left:Q').transform_filter(
+        'datum.amount < 0')
+    fresh(st, 'made_up', (window, float(change.sum()))).altair_chart(
+        alt.layer(step_bars, step_zero, step_up, step_down).properties(height=alt.Step(24)),
+        use_container_width=True)
+
     by_group = history[history['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
     by_group['rank'] = by_group['account_group'].map({g: i for i, g in enumerate(groups)})
     by_group['share'] = by_group['value'] / by_group.groupby('date')['value'].transform('sum')

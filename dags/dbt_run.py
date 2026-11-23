@@ -27,4 +27,11 @@ with DAG(
                      f'dbt --log-path /tmp/dbt_logs run --project-dir {REPO_ROOT}/dough_flow_db --profiles-dir {REPO_ROOT}/dough_flow_db --target-path /tmp/dbt_target',
     )
 
-    wait_for_ingest >> dbt_run
+    # Yahoo closes for the S&P 500 comparisons; beside dbt rather than before it, since the prices reach
+    # the dashboard through views and a Yahoo failure shouldn't hold up the build
+    load_prices = BashOperator(
+        task_id='load_prices',
+        bash_command=f'python3 {REPO_ROOT}/scripts/backfill_prices.py',
+    )
+
+    wait_for_ingest >> [dbt_run, load_prices]
