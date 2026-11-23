@@ -11,6 +11,7 @@ with DAG(
     schedule='0 10 * * *',
     start_date=datetime(2026, 5, 3),
     catchup=False,
+    max_active_runs=1,  # overlapping runs collide on dbt's __dbt_backup renames and drop gold views
 ) as dag:
     # Wait for the purge too: silver is tables, so building before it would keep private rows until tomorrow
     wait_for_ingest = ExternalTaskSensor(
