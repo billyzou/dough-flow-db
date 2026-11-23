@@ -1363,6 +1363,8 @@ with net_worth_tab:
               dict(label='Net savings', amount=change.sum() - market.sum(),
                    name='Everything but the market: mostly income minus spending')]
     steps = pd.DataFrame([s for s in steps if abs(s['amount']) >= 1])
+    # gains first, then losses, each keeping the order above: holdings largest first, then the rest
+    steps = steps.sort_values('amount', key=lambda a: a < 0, kind='stable')
     # each bar runs from the running total to the running total plus its amount; the total row from $0
     steps['end'] = steps['amount'].cumsum()
     steps['start'] = steps['end'] - steps['amount']
