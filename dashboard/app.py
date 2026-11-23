@@ -1278,9 +1278,9 @@ with net_worth_tab:
     # adding up to the net worth change. Builds on What Moved Net Worth, which splits it the same way by month
     title_col, period_col = st.columns([4, 1.2], vertical_alignment='bottom')
     title_col.subheader('What Made Up the Change', help=(
-        "The net worth change in the period, built up from what moved it. Market (blue): each holding's gain or "
-        "loss from price moves, largest first, then accounts with no synced holdings. Net savings (orange): "
-        "everything else, as in What Moved Net Worth: mostly income minus spending."))
+        "The net worth change in the period, built up from what moved it: each holding's gain or loss from "
+        "price moves, largest first, then accounts with no synced holdings, then net savings: everything else, "
+        "as in What Moved Net Worth, mostly income minus spending. Green adds to net worth, red takes away."))
     window = period_col.segmented_control('Period', ['30 days', '90 days'], default='30 days',
                                           label_visibility='collapsed', key='made_up_period') or '30 days'
     # the same start as the tiles above, so the total matches theirs
@@ -1319,55 +1319,53 @@ with net_worth_tab:
     holdings = holdings.reindex(holdings['amount'].abs().sort_values(ascending=False).index)
     with_holdings = market.index.isin(held['account'])
 
-    # The bars: the 8 largest holdings and the rest together, accounts without holdings, and the gap between
-    # the holdings and their accounts' balances, which add up to the market part; then net savings, adding
-    # up to the net worth change. The gap: holdings prices can lag the balance by a day, a start inside a
-    # sync outage has no holdings snapshot that day, and reinvested dividends arrive as shares, not gains
-    top = holdings.head(8)
-    steps = [dict(label=t, amount=r['amount'], kind='Market', name=r['security_name'], account=r['account'],
-                  price=r['price']) for t, r in top.iterrows()]
-    parts = [('Other holdings', holdings['amount'].iloc[8:].sum(), 'The rest of the holdings'),
-             ('Accounts without holdings', market[~with_holdings].sum(),
-              'Investment accounts with no synced holdings, like hand-entered ones'),
-             ('Timing & dividends', market[with_holdings].sum() - holdings['amount'].sum(),
-              "Where holdings and account balances disagree: holdings prices a day behind, a start date during "
-              "a sync outage, and reinvested dividends")]
-    steps += [dict(label=label, amount=amount, kind='Market', name=name)
-              for label, amount, name in parts if abs(amount) >= 1]
-    steps += [dict(label='Market', amount=market.sum(), kind='Total'),
-              dict(label='Net savings', amount=change.sum() - market.sum(), kind='Net savings',
-                   name='Everything but the market: mostly income minus spending'),
-              dict(label='Net worth change', amount=change.sum(), kind='Total')]
-    steps = pd.DataFrame(steps)
-    # a step bar runs from the running total to the running total plus its amount; a total bar from $0
-    running, spans = 0, []
-    for kind, amount in zip(steps['kind'], steps['amount']):
-        spans.append((0, amount) if kind == 'Total' else (running, running + amount))
-        running = amount if kind == 'Total' else running + amount
-    steps[['start', 'end']] = spans
-    steps['top'] = steps[['start', 'end']].max(axis=1)
-    steps['bottom'] = steps[['start', 'end']].min(axis=1)
+    # The rows: every holding, accounts without holdings, and the gap between the holdings and their accounts'
+    # balances, which add up to the market part; then net savings, adding up to the net worth change. The gap:
+    # holdings prices can lag the balance by a day, a start inside a sync outage has no holdings snapshot that
+    # day, and reinvested dividends arrive as shares, not gains. A 401K fund's code (VANG.TARG.2060.PLUS) is
+    # hard to read, so a holding without a plain ticker shows its name
+    steps = [dict(label=t if len(t) <= 5 else r['security_name'], amount=r['amount'], name=r['security_name'],
+                  account=r['account'], price=r['price']) for t, r in holdings.iterrows()]
+    steps += [dict(label='Accounts without holdings', amount=market[~with_holdings].sum(),
+                   name='Investment accounts with no synced holdings, like hand-entered ones'),
+              dict(label='Timing & dividends', amount=market[with_holdings].sum() - holdings['amount'].sum(),
+                   name='Where holdings and account balances disagree: holdings prices a day behind, a start date '
+                        'during a sync outage, and reinvested dividends'),
+              dict(label='Net savings', amount=change.sum() - market.sum(),
+                   name='Everything but the market: mostly income minus spending')]
+    steps = pd.DataFrame([s for s in steps if abs(s['amount']) >= 1])
+    # each bar runs from the running total to the running total plus its amount; the total row from $0
+    steps['end'] = steps['amount'].cumsum()
+    steps['start'] = steps['end'] - steps['amount']
+    steps = pd.concat([steps, pd.DataFrame([dict(label='Net worth change', amount=change.sum(), start=0,
+                                                 end=change.sum())])], ignore_index=True)
+    steps['left'] = steps[['start', 'end']].min(axis=1)
+    steps['right'] = steps[['start', 'end']].max(axis=1)
     steps['text'] = steps['amount'].map(lambda v: money(v, sign=True))
+    steps['sign'] = steps['amount'].map(lambda v: 'Gain' if v >= 0 else 'Loss')
 
-    kinds_shown = ['Market', 'Net savings', 'Total']
-    x = alt.X('label:N', sort=list(steps['label']), title=None, axis=alt.Axis(labelAngle=-35, labelLimit=160))
+    # one row per bar, so every label fits, read top to bottom
+    y = alt.Y('label:N', sort=list(steps['label']), title=None, axis=alt.Axis(labelLimit=220))
+    # room on both sides for the amounts beside the bars at the ends
+    low, high = min(steps['left'].min(), 0), max(steps['right'].max(), 0)
+    pad = (high - low) * 0.12
     step_bars = alt.Chart(steps).mark_bar(cornerRadius=3).encode(
-        x=x, y=alt.Y('start:Q', title=None, axis=alt.Axis(format='$,.0f')), y2='end:Q',
-        color=alt.Color('kind:N', title=None, sort=kinds_shown,
-                        scale=alt.Scale(domain=kinds_shown, range=PALETTE[:2] + [OTHER]),
-                        legend=alt.Legend(orient='top-right', direction='horizontal')),
+        y=y, x=alt.X('start:Q', title=None, axis=alt.Axis(format='$,.0f'),
+                     scale=alt.Scale(domain=[low - pad, high + pad], nice=False)), x2='end:Q',
+        color=alt.Color('sign:N', legend=None, scale=alt.Scale(domain=['Gain', 'Loss'], range=['#30a46c', '#e5484d'])),
         tooltip=[alt.Tooltip('label:N', title=' '), alt.Tooltip('name:N', title='What'),
                  alt.Tooltip('account:N', title='Account'), alt.Tooltip('price:Q', title='Price change', format='+.1%'),
                  alt.Tooltip('amount:Q', title='Change', format='$,.0f')],
     )
-    step_zero = alt.Chart(pd.DataFrame({'amount': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(y='amount:Q')
-    step_labels = alt.Chart(steps).encode(x=x, text='text:N')
-    step_up = step_labels.mark_text(dy=-8, fontSize=12, color=OTHER).encode(y='top:Q').transform_filter(
+    step_zero = alt.Chart(pd.DataFrame({'amount': [0]})).mark_rule(color=OTHER, strokeDash=[2, 2]).encode(x='amount:Q')
+    # each amount just past its bar's end: right of a gain, left of a loss
+    step_labels = alt.Chart(steps).encode(y=y, text='text:N')
+    step_up = step_labels.mark_text(align='left', dx=4, fontSize=12, color=OTHER).encode(x='right:Q').transform_filter(
         'datum.amount >= 0')
-    step_down = step_labels.mark_text(dy=12, fontSize=12, color=OTHER).encode(y='bottom:Q').transform_filter(
+    step_down = step_labels.mark_text(align='right', dx=-4, fontSize=12, color=OTHER).encode(x='left:Q').transform_filter(
         'datum.amount < 0')
     fresh(st, 'made_up', (window, float(change.sum()))).altair_chart(
-        alt.layer(step_bars, step_zero, step_up, step_down).properties(height=CHART_HEIGHT + 60),
+        alt.layer(step_bars, step_zero, step_up, step_down).properties(height=alt.Step(24)),
         use_container_width=True)
 
     # was it the market? the synced investment accounts' market part against the S&P 500 over the same days
