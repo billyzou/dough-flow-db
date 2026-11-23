@@ -1301,6 +1301,26 @@ with net_worth_tab:
     moved_in = flows.groupby('account')['amount'].sum().reindex(change.index, fill_value=0)
     market = (change - moved_in.where(linked, 0)).where(invested, 0)
 
+    # Was it the market? The synced investment accounts' market part against the S&P 500 over the same days,
+    # within 2 points counting as in line with it
+    spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
+    spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
+    spy = spy.reindex(pd.date_range(spy.index.min(), latest_date)).ffill().shift(1)  # the previous close
+    synced = invested & linked
+    invest_return = market[synced].sum() / by_account.loc[synced, since].sum()
+    spy_return = spy.get(latest_date) / spy.get(since) - 1
+    if pd.notna(spy_return):
+        gap = invest_return - spy_return
+        verdict = ('in line with the market, so the market moved, not something specific to what you hold'
+                   if abs(gap) <= 0.02 else 'you did better than the market' if gap > 0
+                   else 'you did worse than the market; the biggest bars below show where')
+
+        def moved(r):
+            return f"{'rose' if r >= 0 else 'fell'} {abs(r):.1%}"
+
+        st.caption(f'From price moves alone, your investments {moved(invest_return)} while the S&P 500 '
+                   f'{moved(spy_return)}: {verdict}.')
+
     # Each holding's part: its shares times its price change, from the last holdings snapshot on or before
     # the start (there's none on days the sync was down)
     held = query("select snapshot_date as date, ticker, account, quantity, price "
@@ -1367,17 +1387,6 @@ with net_worth_tab:
     fresh(st, 'made_up', (window, float(change.sum()))).altair_chart(
         alt.layer(step_bars, step_zero, step_up, step_down).properties(height=alt.Step(24)),
         use_container_width=True)
-
-    # was it the market? the synced investment accounts' market part against the S&P 500 over the same days
-    spy = query("select price_date, close from gold.security_prices where ticker = 'SPY'")
-    spy = spy.set_index(pd.to_datetime(spy['price_date']))['close']
-    spy = spy.reindex(pd.date_range(spy.index.min(), latest_date)).ffill().shift(1)  # the previous close
-    synced = invested & linked
-    invest_return = market[synced].sum() / by_account.loc[synced, since].sum()
-    spy_return = spy.get(latest_date) / spy.get(since) - 1
-    if pd.notna(spy_return):
-        st.caption(f'{since:%b %d} – {latest_date:%b %d}: synced investments {invest_return:+.1%} from the market, '
-                   f'S&P 500 {spy_return:+.1%}.')
 
     by_group = history[history['account_group'].isin(groups)].groupby(['date', 'account_group'], as_index=False)['value'].sum()
     by_group['rank'] = by_group['account_group'].map({g: i for i, g in enumerate(groups)})
