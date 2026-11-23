@@ -27,3 +27,10 @@ sources:
         description: Frozen copy of the pre-medallion transactions table, incl. the 2025 CSV backfill.
       - name: legacy_account_balances
         description: Frozen copy of the pre-medallion account_balances table.
+
+  - name: ops
+    description: Pipeline bookkeeping. Written by scripts/, defined in sql/schema.sql.
+    schema: ops
+    tables:
+      - name: pipeline_runs
+        description: One row per Plaid ingest run per enrollment; days without a successful run are outages.
