@@ -1670,7 +1670,10 @@ with fire_tab:
     market_month = invested * market_rate / 12
     hysa_month = hysa_balance * hysa_rate / 12
 
-    total_col, market_col, hysa_col = st.columns(3)
+    # average spend over the last 12 full months, as the This Month tab's typical month uses
+    avg_spend = query('select avg_monthly_spend from gold.mtd_avg_reference limit 1')['avg_monthly_spend'].iloc[0]
+
+    total_col, market_col, hysa_col, spend_col = st.columns(4)
     total_col.metric('Passive income', f'{money(market_month + hysa_month)}/mo', border=True, height='stretch',
                      help=f'{money((market_month + hysa_month) * 12)} a year')
     market_col.metric('Market', f'{money(market_month)}/mo', border=True, height='stretch',
@@ -1678,6 +1681,8 @@ with fire_tab:
     hysa_col.metric('HYSA interest', f'{money(hysa_month)}/mo', border=True, height='stretch',
                     help=f"{money(hysa_balance)} in {', '.join(hysa['account']) or 'no high-yield account'} "
                          f'× {hysa_rate:.1%} a year')
+    spend_col.metric('Monthly spend', f'{money(avg_spend)}/mo', border=True, height='stretch',
+                     help='Average of the last 12 full months of spending')
 
     # the formulas with today's numbers, so the estimate can be checked by hand
     st.markdown('#### How it\'s calculated')
@@ -1691,7 +1696,10 @@ with fire_tab:
         '45 days) works out to 1% a year or more; the rate starts at that payment × 12 ÷ the balance. Other cash '
         'earns nothing.\n'
         f'- **Passive income** = Market + HYSA interest = {money(market_month)} + {money(hysa_month)} = '
-        f'**{money(market_month + hysa_month)}/mo**, or {money((market_month + hysa_month) * 12)} a year.'))
+        f'**{money(market_month + hysa_month)}/mo**, or {money((market_month + hysa_month) * 12)} a year.\n'
+        f'- **Monthly spend** = last 12 full months of spending ÷ 12 = {money(avg_spend * 12)} ÷ 12 = '
+        f'**{money(avg_spend)}/mo**. Spending is the same as on the This Month and This Year tabs: '
+        'every expense except transfers (card payments are transfers, so purchases count once), less refunds.'))
 
 # ---------- How to Use ----------
 with how_to_use_tab:
