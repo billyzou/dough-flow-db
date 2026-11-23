@@ -867,9 +867,9 @@ with st.container(horizontal=True, vertical_alignment='center', key='masthead'):
         st.badge('Demo data', icon=':material/visibility:', color='orange')
 
 categories = query('select * from gold.category_comparison')
-net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, *ask_tab, how_to_use_tab = st.tabs(
+net_worth_tab, holdings_tab, this_month_tab, this_year_tab, transactions_tab, *ask_tab, fire_tab, how_to_use_tab = st.tabs(
     ['Net Worth', 'Investments', 'This Month', 'This Year', 'Transactions']
-    + (['Ask Dough Bot'] if LLM_URL else []) + ['How to Use'])
+    + (['Ask Dough Bot'] if LLM_URL else []) + ['FIRE (WIP)', 'How to Use'])
 
 # ---------- This Month: am I on track? ----------
 with this_month_tab:
@@ -1637,6 +1637,48 @@ if ask_tab:
                     st.markdown(escape_dollars(answer))
                     st.session_state.chat.append({'role': 'assistant', 'content': answer, 'steps': steps})
 
+# ---------- FIRE (work in progress): what do my assets earn me each month? ----------
+with fire_tab:
+    st.subheader('Passive Income', help=(
+        'A rough estimate from simple assumptions, not from the actual holdings: what the money invested and '
+        'in the high-yield savings account earns. Other cash earns nothing.'))
+    fire_balances = query("""
+        select account_id, institution || ' · ' || account_name as account, account_group, balance
+        from gold.daily_balances
+        where date = (select max(date) from gold.daily_balances)
+    """)
+    # A high-yield savings account: a cash account whose latest interest payment (in the last 45 days) works out
+    # to 1% a year or more, found from the data so no account name is in the code
+    last_interest = query("""
+        select distinct on (account_id) account_id, amount as last_interest
+        from gold.transactions
+        where description ~* 'interest' and amount > 0 and transaction_date >= current_date - 45
+        order by account_id, transaction_date desc
+    """)
+    cash = fire_balances[fire_balances['account_group'] == 'Cash'].merge(last_interest, on='account_id', how='left')
+    cash['paid_rate'] = cash['last_interest'].fillna(0) * 12 / cash['balance']
+    hysa = cash[cash['paid_rate'] >= 0.01]
+    hysa_balance = hysa['balance'].sum()
+    paid_rate = hysa['last_interest'].sum() * 12 / hysa_balance if hysa_balance else 0.0
+    invested = fire_balances.loc[fire_balances['account_group'].isin(['Investments', 'Retirement']), 'balance'].sum()
+
+    market_col, hysa_col, _ = st.columns(3)
+    market_rate = market_col.number_input('Market return (% a year)', 0.0, 15.0, 4.0, 0.5, key='fire_market_rate',
+                                          help='Gains, realized or not, plus dividends') / 100
+    hysa_rate = hysa_col.number_input('HYSA rate (% a year)', 0.0, 10.0, round(paid_rate * 100, 1), 0.1,
+                                      key='fire_hysa_rate', help="Starts at what it paid last month") / 100
+    market_month = invested * market_rate / 12
+    hysa_month = hysa_balance * hysa_rate / 12
+
+    total_col, market_col, hysa_col = st.columns(3)
+    total_col.metric('Passive income', f'{money(market_month + hysa_month)}/mo', border=True, height='stretch',
+                     help=f'{money((market_month + hysa_month) * 12)} a year')
+    market_col.metric('Market', f'{money(market_month)}/mo', border=True, height='stretch',
+                      help=f'{money(invested)} in investment and retirement accounts × {market_rate:.1%} a year')
+    hysa_col.metric('HYSA interest', f'{money(hysa_month)}/mo', border=True, height='stretch',
+                    help=f"{money(hysa_balance)} in {', '.join(hysa['account']) or 'no high-yield account'} "
+                         f'× {hysa_rate:.1%} a year')
+
 # ---------- How to Use ----------
 with how_to_use_tab:
     st.subheader("What's in each tab")
@@ -1645,7 +1687,9 @@ with how_to_use_tab:
         '- **Investments**: holdings in your investment accounts, with gains and rolling 1-year return vs the S&P 500.\n'
         '- **This Month**: discretionary and total spending so far vs your typical month pace, by category, and top merchants.\n'
         '- **This Year**: year-to-date spend and savings, monthly Housing & Bills and discretionary spend (filterable by category) vs last year, and net cash flow.\n'
-        '- **Transactions**: every transaction, searchable and filterable by date, category and account.')
+        '- **Transactions**: every transaction, searchable and filterable by date, category and account.\n'
+        '- **FIRE (WIP)**: a rough monthly passive income estimate from your invested balance and high-yield savings, '
+        'with the return and interest rate as editable assumptions.')
 
     st.subheader('How to use the line charts')
     st.markdown(
