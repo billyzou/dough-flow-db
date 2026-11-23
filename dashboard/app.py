@@ -1679,6 +1679,20 @@ with fire_tab:
                     help=f"{money(hysa_balance)} in {', '.join(hysa['account']) or 'no high-yield account'} "
                          f'× {hysa_rate:.1%} a year')
 
+    # the formulas with today's numbers, so the estimate can be checked by hand
+    st.markdown('#### How it\'s calculated')
+    st.markdown(escape_dollars(
+        f'- **Market** = invested × market return ÷ 12 = {money(invested)} × {market_rate:.1%} ÷ 12 = '
+        f'**{money(market_month)}/mo**. Invested is every investment and retirement account, including '
+        'hand-entered ones. The return is an assumption, not what the holdings actually did: it stands for '
+        'gains, realized or not, plus dividends.\n'
+        f'- **HYSA interest** = HYSA balance × HYSA rate ÷ 12 = {money(hysa_balance)} × {hysa_rate:.1%} ÷ 12 = '
+        f'**{money(hysa_month)}/mo**. A cash account counts as a HYSA when its latest interest payment (in the last '
+        '45 days) works out to 1% a year or more; the rate starts at that payment × 12 ÷ the balance. Other cash '
+        'earns nothing.\n'
+        f'- **Passive income** = Market + HYSA interest = {money(market_month)} + {money(hysa_month)} = '
+        f'**{money(market_month + hysa_month)}/mo**, or {money((market_month + hysa_month) * 12)} a year.'))
+
 # ---------- How to Use ----------
 with how_to_use_tab:
     st.subheader("What's in each tab")
