@@ -1329,7 +1329,8 @@ with net_worth_tab:
     held['holding'] = held['ticker'] + ' · ' + held['account']
     held_since = held.loc[held['date'] <= since, 'date'].max()
     held = market_moves(held[held['date'] >= (held_since if pd.notna(held_since) else since)])
-    names = query('select ticker, security_name from gold.holdings').drop_duplicates('ticker').set_index('ticker')
+    names = query('select ticker, security_type, security_name from gold.holdings').drop_duplicates('ticker')
+    names = names.set_index('ticker')
     by_ticker = held.sort_values('date').groupby('ticker')
     holdings = pd.DataFrame({
         'amount': by_ticker['market'].sum(),
@@ -1342,9 +1343,17 @@ with net_worth_tab:
     # The rows: every holding, accounts without holdings, and the gap between the holdings and their accounts'
     # balances, which add up to the market part; then net savings, adding up to the net worth change. The gap:
     # holdings prices can lag the balance by a day, a start inside a sync outage has no holdings snapshot that
-    # day, and reinvested dividends arrive as shares, not gains. A 401K fund's code (VANG.TARG.2060.PLUS) is
-    # hard to read, so a holding without a plain ticker shows its name
-    steps = [dict(label=t if len(t) <= 5 else r['security_name'], amount=r['amount'], name=r['security_name'],
+    # day, and reinvested dividends arrive as shares, not gains.
+    # A holding reads "(VOO) Vanguard S&P 500 ETF". Names come as "issuer - fund": a fund keeps the fund
+    # part, a stock the company ("Visa Inc - Ordinary Shares - Class A" is Visa Inc). A 401K fund's code
+    # (VANG.TARG.2060.PLUS) isn't a ticker, so it shows just its name
+    def holding_label(ticker, kind, name):
+        parts = name.split(' - ')
+        short = parts[1] if len(parts) > 1 and kind != 'equity' else parts[0]
+        return f'({ticker}) {short}' if len(ticker) <= 5 else short
+
+    steps = [dict(label=holding_label(t, r['security_type'], r['security_name']), amount=r['amount'],
+                  name=r['security_name'],
                   account=r['account'], price=r['price']) for t, r in holdings.iterrows()]
     steps += [dict(label='Accounts without holdings', amount=market[~with_holdings].sum(),
                    name='Investment accounts with no synced holdings, like hand-entered ones'),
@@ -1365,7 +1374,7 @@ with net_worth_tab:
     steps['sign'] = steps['amount'].map(lambda v: 'Gain' if v >= 0 else 'Loss')
 
     # one row per bar, so every label fits, read top to bottom
-    y = alt.Y('label:N', sort=list(steps['label']), title=None, axis=alt.Axis(labelLimit=220))
+    y = alt.Y('label:N', sort=list(steps['label']), title=None, axis=alt.Axis(labelLimit=320))
     # room on both sides for the amounts beside the bars at the ends
     low, high = min(steps['left'].min(), 0), max(steps['right'].max(), 0)
     pad = (high - low) * 0.12
