@@ -37,7 +37,14 @@ straight line unless it's run first, or until it's added to a daily DAG.
 **Why:** On restart after the Nov 17 outage, two catch-up `dbt_run` DAG runs collided on dbt's
 `__dbt_backup` renames and dropped the gold views.
 
-**Ran:** A manual `dbt run`, then set `max_active_runs=1` on the `dbt_run` DAG (commit 091c8fc).
+**Ran:** A manual `dbt seed` + `dbt run` (the same command as the DAG) in the Airflow scheduler
+container, then set `max_active_runs=1` on the `dbt_run` DAG (commit 091c8fc). Also marked the
+stuck `scheduled__2026-11-16T10:00:00+00:00` run (left "running" at `wait_for_ingest` by the outage)
+as failed.
+
+**Checked:** dbt PASS=34 ERROR=0; all gold views present again; Streamlit loads (HTTP 200); no
+leftover `__dbt_backup`/`__dbt_tmp` relations; Airflow scheduler reports `max_active_runs = 1`.
+The DAG's own runs for Nov 17 and Nov 21 stay recorded as failed; the next scheduled run confirms the fix.
 
 ---
 
