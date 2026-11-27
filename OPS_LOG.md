@@ -5,6 +5,30 @@ Anything not done by the daily DAGs goes here: what broke, what was run, how it 
 
 ---
 
+## 2026-11-26: Recategorized Amex Platinum statement credits
+
+**Why:** The card's statement credits (digital entertainment, Walmart+, Uber One, Resy, hotel, CLEAR,
+Lululemon, Saks, Pay with Points) were spread across Housing & Bills, Shopping, Transport,
+Entertainment and Transfers depending on how Plaid or the CSV backfill labelled them, so they didn't
+offset the charges they pay for, and the CLEAR credit was left out of spending entirely.
+
+**Ran:**
+- Changed `models/silver/fct_transactions.sql`: a description rule files each credit under the
+  category of what it pays for (Entertainment, Shopping, Transport, Food & Groceries, Travel).
+  Manual overrides still win; the rule wins over Plaid's labels. Plaid's Walmart+ credits arrive
+  named just "Walmart" and already land in Shopping, so they're untouched.
+- `dbt run --select fct_transactions+` in the Airflow scheduler container.
+
+**Checked:** Every credit description now sits in a single category; per-category before/after
+totals differ only by the moved credits (the moves net to zero apart from the CLEAR credit leaving
+Transfers); no uncategorized rows; `dbt test` 58/58 pass.
+
+**Not changed:** `ANNUAL HOTEL CREDIT` (Housing & Bills) and `PAYYOURSELFBACK CREDIT` (Shopping) are
+from other cards; the subscription charges themselves are also inconsistent in the CSV backfill era
+(e.g. Disney+ and YouTube Premium under Shopping or Housing & Bills).
+
+---
+
 ## 2026-11-23: Filled the Nov 17–22 outage gap in net worth
 
 **Why:** The Mac was down Nov 17–22 (power outage, then a full disk stopped OrbStack). Plaid can't

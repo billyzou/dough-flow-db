@@ -40,12 +40,33 @@ unioned as (
     select * from plaid
     union all
     select * from legacy
+),
+
+-- Amex Platinum statement credits go to the category of what they pay for, so each nets out
+-- against its charge there. Plaid and the CSV backfill label them all over the place.
+-- (Plaid's Walmart+ credits arrive named just "Walmart" and already land in Shopping.)
+credits as (
+    select
+        u.*,
+        case
+            when d ilike 'platinum digital entertainment credit%'      then 7  -- Entertainment
+            when d ilike 'platinum walmart+ credit%'
+              or d ilike 'platinum lululemon credit%'
+              or d ilike 'platinum saks credit%'                       then 3  -- Shopping
+            when d ilike 'platinum uber one credit%'                   then 5  -- Transport
+            when d ilike 'platinum resy credit%'                       then 2  -- Food & Groceries
+            when d ilike 'platinum hotel credit%'
+              or d ilike 'amex clear plus credit%'
+              or d ilike 'amex travel pay with points credit%'         then 6  -- Travel
+        end as credit_category_id
+    from unioned u
+    cross join lateral (select regexp_replace(u.description, '\s+', ' ', 'g') as d) n
 )
 
 select
     u.transaction_id,
     u.account_id,
-    coalesce(o.category_id, md.category_id, m.category_id) as category_id,
+    coalesce(o.category_id, u.credit_category_id, md.category_id, m.category_id) as category_id,
     u.transaction_date,
     u.posted_date,
     u.amount,
@@ -58,9 +79,9 @@ select
     u.external_category,
     u.transaction_type,
     u.source
-from unioned u
+from credits u
 left join {{ ref('stg_category_overrides') }} o using (transaction_id)
 -- a detailed label (e.g. gyms within PERSONAL_CARE) wins over the primary one
 left join {{ ref('category_map') }} md on md.external_category = u.external_category_detailed
 left join {{ ref('category_map') }} m on m.external_category = u.external_category
-left join {{ ref('dim_category') }} c on c.category_id = coalesce(o.category_id, md.category_id, m.category_id)
+left join {{ ref('dim_category') }} c on c.category_id = coalesce(o.category_id, u.credit_category_id, md.category_id, m.category_id)
