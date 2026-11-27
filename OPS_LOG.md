@@ -5,6 +5,22 @@ Anything not done by the daily DAGs goes here: what broke, what was run, how it 
 
 ---
 
+## 2026-11-26: Plaid afternoon-freshness test (read-only)
+
+**Why:** To see whether a second, post-market-close Plaid pull would give fresher investment
+balances and prices than the 10:00 UTC ingest, before adding one to the DAGs.
+
+**Ran:** `scripts/plaid_freshness_test.py` in the Airflow scheduler container. It calls Plaid
+`/accounts/get` and `/investments/holdings/get` and compares them with the latest bronze snapshot.
+It writes nothing to the database. Dry run on 2026-11-26 (market holiday). The real test is
+scheduled for 2026-11-30 21:30 UTC by a one-shot LaunchAgent (`com.billyzou.plaid-freshness-test`,
+outside the repo) that pushes the summary via ntfy and then removes itself.
+
+**Checked:** Dry run: 1/10 investment balances changed and 3/22 holdings had a newer price date
+than the morning pull, all at Fidelity. Plaid does refresh at least one institution after 10:00 UTC.
+
+---
+
 ## 2026-11-26: Recategorized Amex Platinum statement credits
 
 **Why:** The card's statement credits (digital entertainment, Walmart+, Uber One, Resy, hotel, CLEAR,
